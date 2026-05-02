@@ -1,0 +1,123 @@
+{
+  "theme_and_archetype": {
+    "domain": "Web3, Crypto, Privacy Protocol",
+    "theme": "Dark",
+    "archetype": "7 (Electric & Neon) combined with 4 (Swiss & High-Contrast) for trust",
+    "mood": "High-tech, premium privacy, cryptographic trust, vibrant but grounded.",
+    "rationale": "Balances the electric neon gradients of Solana (Purple/Green) with deep void blacks and glassmorphism to look trustworthy and not like a sketchy casino."
+  },
+  "typography": {
+    "headings": {
+      "font_family": "Unbounded",
+      "rationale": "Wide, tech-forward, crypto-native aesthetic. Strict banning of Inter/Roboto for headings."
+    },
+    "body": {
+      "font_family": "Outfit"
+    },
+    "monospace": {
+      "font_family": "JetBrains Mono",
+      "usage": "Used for all wallet addresses, transaction hashes, ZK proof commitments, and numeric data to convey technical precision."
+    },
+    "scales": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl tracking-tighter",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl tracking-tight",
+      "h3": "text-xl sm:text-2xl tracking-tight",
+      "h4": "text-lg sm:text-xl",
+      "body": "text-base text-zinc-400",
+      "labels": "text-xs tracking-[0.2em] uppercase text-zinc-500"
+    }
+  },
+  "colors": {
+    "backgrounds": {
+      "base": "#050505",
+      "surface_1": "#0A0A0A",
+      "surface_2": "#121212"
+    },
+    "solana_accents": {
+      "purple": "#9945FF",
+      "green": "#14F195",
+      "gradient": "bg-gradient-to-r from-[#9945FF] to-[#14F195]"
+    },
+    "text": {
+      "primary": "#FFFFFF",
+      "secondary": "#A1A1AA",
+      "muted": "#52525B"
+    },
+    "borders": {
+      "subtle": "border-white/5",
+      "glow": "border-purple-500/20"
+    },
+    "semantic": {
+      "success": "#14F195",
+      "warning": "#FBBF24",
+      "error": "#EF4444"
+    }
+  },
+  "spacing_and_layout": {
+    "philosophy": "Generous Spacing, Optical Alignment",
+    "container_padding": "p-6 md:p-8 lg:p-12",
+    "grids": {
+      "landing_bento": "grid-cols-1 md:grid-cols-8 lg:grid-cols-12 gap-6 md:gap-8",
+      "dashboard": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6"
+    }
+  },
+  "components": {
+    "surfaces": {
+      "glassmorphism": "bg-black/40 backdrop-blur-2xl border border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.5)]",
+      "solid_card": "bg-[#0A0A0A] border border-white/5",
+      "tracing_beam": "Use mask-image and moving gradient for high-conversion areas (e.g., Deposit CTA)."
+    },
+    "buttons": {
+      "primary": "bg-white text-black font-semibold rounded-none hover:bg-zinc-200 transition-colors",
+      "solana_glow": "bg-transparent border border-[#14F195]/50 text-[#14F195] hover:bg-[#14F195]/10 hover:border-[#14F195] transition-all drop-shadow-[0_0_8px_rgba(20,241,149,0.3)]",
+      "secondary": "bg-[#121212] border border-white/10 text-white hover:bg-[#1A1A1A] transition-colors"
+    },
+    "navigation": {
+      "type": "Glassmorphism sticky top nav. z-50.",
+      "items": "Logo left, Links center, Connect Wallet button right. Mobile uses hamburger menu."
+    },
+    "forms_and_inputs": {
+      "style": "bg-[#050505] border border-white/10 focus:border-[#9945FF] focus:ring-1 focus:ring-[#9945FF] text-white rounded-none transition-all placeholder:text-zinc-600"
+    }
+  },
+  "animations": {
+    "micro_interactions": "Hover states must explicitly set text and bg colors. Buttons should have slight scale effect (scale-95 on active).",
+    "page_transitions": "Fade in and slight upward translation (translate-y-4) on mount.",
+    "complex_visuals": "For Architecture visualization, use React Force Graph 3D or D3.js (simulated via CSS animations if libraries are not available) with pulsing glowing nodes representing ZK proofs and Relayers."
+  },
+  "accessibility": {
+    "contrast": "Ensure white text on dark gray/black backgrounds meets APCA standards.",
+    "focus": "All interactive elements must have visible focus rings (focus:ring-2 focus:ring-[#14F195] focus:outline-none).",
+    "test_ids": "Every button, input, tab, and major widget MUST have a `data-testid` attribute (e.g., `data-testid=\"connect-wallet-btn\"`)."
+  },
+  "media_urls": {
+    "hero_background": {
+      "url": "",
+      "description": "Abstract ZK proofs and cryptography Merkle tree nodes with Solana purple/green glow. Self-host the asset and fill in the URL."
+    },
+    "architecture_nodes": {
+      "url": "",
+      "description": "3D geometric shapes for privacy nodes and layers. Self-host the asset and fill in the URL."
+    },
+    "dashboard_texture": {
+      "url": "",
+      "description": "Subtle glowing data lines texture for dashboard backgrounds. Self-host the asset and fill in the URL."
+    },
+    "solana_abstract": {
+      "url": "",
+      "description": "Abstract visual for Solana asset representation if needed. Self-host the asset and fill in the URL."
+    }
+  },
+  "instructions_to_main_agent": {
+    "general": "Build a React + Tailwind application. Use pure HTML/Tailwind for marketing/landing pages, and Shadcn for complex inputs, dialogs, and tables. Use standard .js/.jsx extensions. Must install lucide-react or phosphor-icons.",
+    "routing": "Implement client-side routing (react-router-dom) for Landing, Deposit, Withdraw, Relayer Status, Compliance, and Architecture.",
+    "pages": {
+      "landing": "Hero section with `hero_background` overlayed. Emphasize privacy for Bags.fm creators. Features bento grid.",
+      "deposit_withdraw": "Core dApp interface. Use `dashboard_texture` as subtle background. Implement forms for depositing SOL/SPL tokens, generating a 'secret note' (mocked), and a separate form for pasting the note to withdraw via relayers. Visualize the 'Range Risk API' compliance check before deposit.",
+      "relayer_status": "Data-heavy dashboard. Use 'Control Room' grid. List mocked relayers, uptime, fee percentages, and anonymity set sizes.",
+      "compliance_check": "Dashboard showing wallet risk scoring using progress bars or circular charts.",
+      "architecture": "An interactive or heavily animated page explaining the 4 pillars (Smart Contract, Bags API, Privacy Backend, Relayer). Use `architecture_nodes` image or CSS/SVG animations to show the deposit -> mixer -> withdraw flow."
+    },
+    "technical": "All state is mocked (no real Web3 provider needed, just UI simulation). Show toast notifications (using sonner) for 'Generating ZK Proof...', 'Transaction Confirmed', etc."
+  }
+}
