@@ -72,10 +72,41 @@ logger = logging.getLogger(__name__)
 SOL_TOKEN_SENTINEL = "SOL"
 # Anchor's per-instruction sighash. We compute it on import so we never
 # get out-of-sync with the program's `pub fn withdraw(...)` name.
+#
+# `withdraw` is the backward-compat alias the Anchor program exposes
+# alongside the explicit `withdraw_sol` / `withdraw_spl` variants. Old
+# clients keep working; new SPL flows use the dedicated SPL sighash.
 WITHDRAW_SIGHASH = hashlib.sha256(b"global:withdraw").digest()[:8]
+WITHDRAW_SOL_SIGHASH = hashlib.sha256(b"global:withdraw_sol").digest()[:8]
+WITHDRAW_SPL_SIGHASH = hashlib.sha256(b"global:withdraw_spl").digest()[:8]
 MERKLE_TREE_SEED = b"merkle_tree"
 VAULT_SEED = b"vault"
 NULLIFIER_SEED = b"nullifier"
+
+# SPL Token + Associated Token Account program IDs. Hard-coded to avoid
+# pulling another solders sub-module that may not be present across the
+# Python versions this repo supports.
+SPL_TOKEN_PROGRAM_ID = Pubkey.from_string(
+    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+)
+ASSOCIATED_TOKEN_PROGRAM_ID = Pubkey.from_string(
+    "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+)
+
+
+def _derive_ata(owner: Pubkey, mint: Pubkey) -> Pubkey:
+    """Compute the canonical Associated Token Account for ``(owner, mint)``.
+
+    Mirrors Solana's
+    ``spl_associated_token_account::get_associated_token_address`` —
+    seeds are `[owner, TOKEN_PROGRAM_ID, mint]` over the ATA program.
+    """
+
+    ata, _ = Pubkey.find_program_address(
+        [bytes(owner), bytes(SPL_TOKEN_PROGRAM_ID), bytes(mint)],
+        ASSOCIATED_TOKEN_PROGRAM_ID,
+    )
+    return ata
 
 
 class SolanaRpc(Protocol):
@@ -218,12 +249,16 @@ def _build_withdraw_ix(
     nullifier_bytes: bytes,
     amount: int,
 ) -> Instruction:
-    """Build the Anchor ``withdraw`` instruction.
+    """Build the Anchor ``withdraw`` instruction (SOL alias).
 
     Matches the on-chain Anchor program at
     ``programs/bagsvault/src/instructions/withdraw.rs``. PDAs are
     derived deterministically so a client doesn't need to round-trip an
     extra RPC call to learn them.
+
+    For SPL pools, callers should use :func:`_build_withdraw_spl_ix` —
+    this helper preserves the legacy ``withdraw`` sighash and 6-account
+    layout for backward compat.
     """
 
     root32 = root_bytes.rjust(32, b"\x00")[-32:]
@@ -252,6 +287,104 @@ def _build_withdraw_ix(
         AccountMeta(pubkey=SYSTEM_PROGRAM_ID, is_signer=False, is_writable=False),
     ]
     return Instruction(program_id=program_id, accounts=accounts, data=bytes(data))
+
+
+def _build_withdraw_spl_ix(
+    *,
+    program_id: Pubkey,
+    token_mint: Pubkey,
+    recipient: Pubkey,
+    relayer: Pubkey,
+    proof_bytes: bytes,
+    root_bytes: bytes,
+    nullifier_bytes: bytes,
+    amount: int,
+) -> Instruction:
+    """Build the Anchor ``withdraw_spl`` instruction.
+
+    Account ordering matches
+    ``programs/bagsvault/src/instructions/withdraw.rs::WithdrawSpl``:
+
+      0. relayer                   (signer, writable)
+      1. vault PDA                 (writable, [b"vault", token_mint])
+      2. vault_token_account       (writable, ATA of vault PDA)
+      3. tree_state                (writable, [b"merkle_tree", token_mint])
+      4. nullifier_pda             (writable, [b"nullifier", nullifier_hash])
+      5. recipient_account         (read-only — pinned by `address = recipient`)
+      6. recipient_token_account   (writable, ATA of recipient)
+      7. token_program             (read-only)
+      8. system_program            (read-only)
+
+    Instruction-data layout is identical to the SOL variant, only the
+    sighash differs.
+    """
+
+    root32 = root_bytes.rjust(32, b"\x00")[-32:]
+    nullifier32 = nullifier_bytes.rjust(32, b"\x00")[-32:]
+
+    vault_pda, tree_state_pda, nullifier_pda = _derive_pdas(
+        program_id, token_mint, nullifier32
+    )
+    vault_ata = _derive_ata(vault_pda, token_mint)
+    recipient_ata = _derive_ata(recipient, token_mint)
+
+    data = bytearray()
+    data += WITHDRAW_SPL_SIGHASH
+    data += len(proof_bytes).to_bytes(4, "little")
+    data += proof_bytes
+    data += root32
+    data += nullifier32
+    data += bytes(recipient)
+    data += int(amount).to_bytes(8, "little")
+
+    accounts = [
+        AccountMeta(pubkey=relayer, is_signer=True, is_writable=True),
+        AccountMeta(pubkey=vault_pda, is_signer=False, is_writable=True),
+        AccountMeta(pubkey=vault_ata, is_signer=False, is_writable=True),
+        AccountMeta(pubkey=tree_state_pda, is_signer=False, is_writable=True),
+        AccountMeta(pubkey=nullifier_pda, is_signer=False, is_writable=True),
+        AccountMeta(pubkey=recipient, is_signer=False, is_writable=False),
+        AccountMeta(pubkey=recipient_ata, is_signer=False, is_writable=True),
+        AccountMeta(pubkey=SPL_TOKEN_PROGRAM_ID, is_signer=False, is_writable=False),
+        AccountMeta(pubkey=SYSTEM_PROGRAM_ID, is_signer=False, is_writable=False),
+    ]
+    return Instruction(program_id=program_id, accounts=accounts, data=bytes(data))
+
+
+def _build_withdraw_ix_for_pool(
+    *,
+    program_id: Pubkey,
+    token_mint: Pubkey,
+    recipient: Pubkey,
+    relayer: Pubkey,
+    proof_bytes: bytes,
+    root_bytes: bytes,
+    nullifier_bytes: bytes,
+    amount: int,
+) -> Instruction:
+    """Pick the SOL or SPL ix builder based on the pool's token mint."""
+
+    if token_mint == SYSTEM_PROGRAM_ID:
+        return _build_withdraw_ix(
+            program_id=program_id,
+            token_mint=token_mint,
+            recipient=recipient,
+            relayer=relayer,
+            proof_bytes=proof_bytes,
+            root_bytes=root_bytes,
+            nullifier_bytes=nullifier_bytes,
+            amount=amount,
+        )
+    return _build_withdraw_spl_ix(
+        program_id=program_id,
+        token_mint=token_mint,
+        recipient=recipient,
+        relayer=relayer,
+        proof_bytes=proof_bytes,
+        root_bytes=root_bytes,
+        nullifier_bytes=nullifier_bytes,
+        amount=amount,
+    )
 
 
 class WithdrawalService:
@@ -331,7 +464,10 @@ class WithdrawalService:
         token_mint = _resolve_token_mint(public_inputs.token)
 
         relayer_pubkey = self._signer.pubkey_obj()
-        ix = _build_withdraw_ix(
+        # Branch on the pool's token mint: SOL pools use the legacy
+        # `withdraw` ix (kept as an alias on-chain for backward compat),
+        # SPL pools use the dedicated `withdraw_spl` layout.
+        ix = _build_withdraw_ix_for_pool(
             program_id=program_id,
             token_mint=token_mint,
             recipient=recipient_pubkey,

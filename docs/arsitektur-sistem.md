@@ -93,7 +93,7 @@ Lapisan ini menangani logika inti dari privasi dan penyimpanan dana. Implementas
 
 | Komponen | Fungsi | Lokasi sumber |
 |----------|--------|----------------------|
-| **BagsVault Program** | Instruksi `initialize`, `deposit`, `withdraw`, `pause`, `unpause`, `rotate_authority`. | [`src/lib.rs`](../programs/bagsvault/src/lib.rs) + [`src/instructions/`](../programs/bagsvault/src/instructions/) |
+| **BagsVault Program** | Instruksi `initialize`, `deposit_sol`/`deposit_spl` (alias `deposit` → SOL), `withdraw_sol`/`withdraw_spl` (alias `withdraw` → SOL), `register_fee_share`, `pause`, `unpause`, `rotate_authority`. SOL pool memakai system-program transfer, SPL pool memakai `anchor_spl::token::transfer` dengan vault PDA sebagai authority. | [`src/lib.rs`](../programs/bagsvault/src/lib.rs) + [`src/instructions/`](../programs/bagsvault/src/instructions/) |
 | **Merkle Tree State** | Incremental BN254-Poseidon tree depth 20, **rolling buffer 10 root terakhir** sesuai dokumen. PDA `[b"merkle_tree", token_mint]`. | [`src/state.rs::MerkleTreeState`](../programs/bagsvault/src/state.rs), [`src/merkle.rs`](../programs/bagsvault/src/merkle.rs) |
 | **Nullifier Set** | Satu PDA per nullifier (`[b"nullifier", &hash]`); double-spend dilindungi oleh constraint Anchor `init` yang gagal jika PDA sudah ada. | [`src/state.rs::Nullifier`](../programs/bagsvault/src/state.rs) |
 | **Groth16 Verifier** | Verifikasi in-program memakai crate [`groth16-solana`](https://github.com/Lightprotocol/groth16-solana) (BN254). VK didefinisikan di [`src/verifier.rs`](../programs/bagsvault/src/verifier.rs); ganti placeholder dengan output ceremony. Fallback CPI ke Sunspot tetap dimungkinkan via `BAGSVAULT_VERIFIER_ID`. | [`src/verifier.rs`](../programs/bagsvault/src/verifier.rs), [`src/instructions/withdraw.rs`](../programs/bagsvault/src/instructions/withdraw.rs) |
@@ -103,7 +103,7 @@ Protokol ini secara mendalam memanfaatkan infrastruktur Bags API untuk manajemen
 
 *   **Trade Tokens API (`/trade/swap`)**: Digunakan untuk melakukan *swap* token secara otomatis sebelum deposit jika pengguna ingin mendepositkan token kreator spesifik [3].
 *   **Claim Token Fees API (`/token-launch/claim-txs/v3`)**: Kreator dapat mengklaim *fee* mereka langsung ke dalam BagsVault secara anonim [4].
-*   **Fee Share Configuration (`FEE2tBhCKAt7shrod19QttSVREUYPiyMzoku1mL1gqVK`)**: Berinteraksi dengan program *Fee Share V2* Bags untuk memastikan distribusi pendapatan yang tepat [5].
+*   **Fee Share Configuration (`FEE2tBhCKAt7shrod19QttSVREUYPiyMzoku1mL1gqVK`)**: Berinteraksi dengan program *Fee Share V2* Bags untuk memastikan distribusi pendapatan yang tepat [5]. On-chain entry point-nya adalah instruksi `register_fee_share(bps)` di [`programs/bagsvault/src/instructions/fee_share.rs`](../programs/bagsvault/src/instructions/fee_share.rs) — instruksi ini melakukan CPI ke Fee Share V2 dengan vault PDA sebagai *recipient*. Catatan: layout instruksi Fee Share V2 belum terverifikasi terhadap program on-chain (placeholder discriminator); cari komentar `TODO(fee-share)` di [`src/fee_share.rs`](../programs/bagsvault/src/fee_share.rs) sebelum deploy ke mainnet.
 
 ### C. Lapisan Privasi & Kepatuhan (Backend)
 Lapisan ini menyeimbangkan antara privasi absolut dan kepatuhan terhadap regulasi (AML/CTF).

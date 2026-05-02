@@ -13,6 +13,29 @@
       "args": [{ "name": "denomination", "type": "u64" }]
     },
     {
+      "name": "depositSol",
+      "accounts": [
+        { "name": "depositor", "isMut": true, "isSigner": true },
+        { "name": "vault", "isMut": true, "isSigner": false },
+        { "name": "treeState", "isMut": true, "isSigner": false },
+        { "name": "systemProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": [{ "name": "commitment", "type": { "array": ["u8", 32] } }]
+    },
+    {
+      "name": "depositSpl",
+      "accounts": [
+        { "name": "depositor", "isMut": true, "isSigner": true },
+        { "name": "vault", "isMut": true, "isSigner": false },
+        { "name": "depositorTokenAccount", "isMut": true, "isSigner": false },
+        { "name": "vaultTokenAccount", "isMut": true, "isSigner": false },
+        { "name": "treeState", "isMut": true, "isSigner": false },
+        { "name": "tokenProgram", "isMut": false, "isSigner": false },
+        { "name": "systemProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": [{ "name": "commitment", "type": { "array": ["u8", 32] } }]
+    },
+    {
       "name": "deposit",
       "accounts": [
         { "name": "depositor", "isMut": true, "isSigner": true },
@@ -21,6 +44,45 @@
         { "name": "systemProgram", "isMut": false, "isSigner": false }
       ],
       "args": [{ "name": "commitment", "type": { "array": ["u8", 32] } }]
+    },
+    {
+      "name": "withdrawSol",
+      "accounts": [
+        { "name": "relayer", "isMut": true, "isSigner": true },
+        { "name": "vault", "isMut": true, "isSigner": false },
+        { "name": "treeState", "isMut": true, "isSigner": false },
+        { "name": "nullifierPda", "isMut": true, "isSigner": false },
+        { "name": "recipientAccount", "isMut": true, "isSigner": false },
+        { "name": "systemProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": [
+        { "name": "proof", "type": "bytes" },
+        { "name": "root", "type": { "array": ["u8", 32] } },
+        { "name": "nullifierHash", "type": { "array": ["u8", 32] } },
+        { "name": "recipient", "type": "publicKey" },
+        { "name": "amount", "type": "u64" }
+      ]
+    },
+    {
+      "name": "withdrawSpl",
+      "accounts": [
+        { "name": "relayer", "isMut": true, "isSigner": true },
+        { "name": "vault", "isMut": true, "isSigner": false },
+        { "name": "vaultTokenAccount", "isMut": true, "isSigner": false },
+        { "name": "treeState", "isMut": true, "isSigner": false },
+        { "name": "nullifierPda", "isMut": true, "isSigner": false },
+        { "name": "recipientAccount", "isMut": false, "isSigner": false },
+        { "name": "recipientTokenAccount", "isMut": true, "isSigner": false },
+        { "name": "tokenProgram", "isMut": false, "isSigner": false },
+        { "name": "systemProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": [
+        { "name": "proof", "type": "bytes" },
+        { "name": "root", "type": { "array": ["u8", 32] } },
+        { "name": "nullifierHash", "type": { "array": ["u8", 32] } },
+        { "name": "recipient", "type": "publicKey" },
+        { "name": "amount", "type": "u64" }
+      ]
     },
     {
       "name": "withdraw",
@@ -39,6 +101,16 @@
         { "name": "recipient", "type": "publicKey" },
         { "name": "amount", "type": "u64" }
       ]
+    },
+    {
+      "name": "registerFeeShare",
+      "accounts": [
+        { "name": "authority", "isMut": false, "isSigner": true },
+        { "name": "treeState", "isMut": false, "isSigner": false },
+        { "name": "vault", "isMut": true, "isSigner": false },
+        { "name": "feeShareProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": [{ "name": "bps", "type": "u16" }]
     },
     {
       "name": "pause",

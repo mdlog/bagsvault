@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     bagsvault_program_id: str = Field(default="", alias="BAGSVAULT_PROGRAM_ID")
     bagsvault_verifier_id: str = Field(default="", alias="BAGSVAULT_VERIFIER_ID")
     vault_token_mint: str = Field(default="", alias="VAULT_TOKEN_MINT")
+    # Bags Fee Share V2 program — pinned default matches the address
+    # documented in `docs/arsitektur-sistem.md` § 2.B. Future backend
+    # code (e.g. fee-share registration helpers) can read this constant
+    # instead of hard-coding the address.
+    bagsvault_fee_share_program_id: str = Field(
+        default="FEE2tBhCKAt7shrod19QttSVREUYPiyMzoku1mL1gqVK",
+        alias="BAGSVAULT_FEE_SHARE_PROGRAM_ID",
+    )
 
     # Bags API
     bags_api_base_url: str = Field(default="https://api.bags.fm", alias="BAGS_API_BASE_URL")
