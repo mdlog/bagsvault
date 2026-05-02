@@ -28,6 +28,7 @@ pub mod errors;
 pub mod instructions;
 pub mod merkle;
 pub mod state;
+pub mod sunspot;
 pub mod verifier;
 pub mod verifier_vk;
 

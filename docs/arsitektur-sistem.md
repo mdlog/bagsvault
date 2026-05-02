@@ -2,7 +2,61 @@
 
 **BagsVault** adalah protokol privasi yang dirancang khusus untuk ekosistem kreator di Bags.fm. Sistem ini memungkinkan kreator dan pengguna untuk menerima fee, melakukan donasi, dan memindahkan token secara anonim menggunakan *Zero-Knowledge Proofs* (ZK-SNARKs), sambil tetap mematuhi regulasi melalui integrasi verifikasi risiko on-chain.
 
-![BagsVault Architecture Diagram](./bagsvault_architecture.png)
+> Diagram arsitektur (Mermaid — render otomatis di GitHub). Sumber lengkap di
+> [`docs/bagsvault_architecture.mmd`](./bagsvault_architecture.mmd); versi
+> ASCII untuk terminal viewer di [`docs/bagsvault_architecture.txt`](./bagsvault_architecture.txt).
+
+```mermaid
+flowchart LR
+    User([Creator / Supporter])
+
+    subgraph Compliance ["Privacy & Compliance Layer"]
+        direction TB
+        Range[Range Risk API<br/>compliance_service.py]
+        ZK[ZK Proof Generator<br/>zk_proof_service.py<br/>nargo + bb subprocess]
+        Compcache[(Mongo risk_scans<br/>TTL 30d)]
+        Range --- Compcache
+    end
+
+    subgraph BagsAPI ["Bags API Layer"]
+        direction TB
+        Trade[Trade Tokens API<br/>/trade/swap]
+        Claim[Claim Token Fees API<br/>/token-launch/claim-txs/v3]
+        FeeShare[Fee Share V2<br/>FEE2tBhCKAt7...]
+    end
+
+    subgraph Relayer ["Relayer Network"]
+        direction TB
+        Pool[Relayer Pool<br/>relayer_service.py]
+        Exec[Tx Executor<br/>tx_executor.py<br/>simulate→broadcast→confirm]
+        Pool --> Exec
+    end
+
+    subgraph Chain ["Smart Contract Layer (Solana)"]
+        direction TB
+        Program[BagsVault Program<br/>programs/bagsvault/]
+        Merkle[(Merkle Tree State<br/>BN254-Poseidon depth 20<br/>10-root rolling buffer)]
+        Nullifiers[(Nullifier PDAs<br/>1 per spent nullifier)]
+        Vault[(Vault PDA<br/>pooled SOL / SPL)]
+        Program --> Merkle
+        Program --> Nullifiers
+        Program --> Vault
+    end
+
+    User -- "1. claim/donate" --> Claim
+    Claim -- "2. settle" --> Trade
+    User -- "3. compliance check" --> Range
+    Range -- "ok" --> ZK
+    ZK -- "4. commitment = poseidon(secret, nullifier, amount)" --> Program
+    Program -- "5. insert leaf, update root" --> Merkle
+
+    User -- "A. secret + path" --> ZK
+    ZK -- "B. groth16 proof" --> Pool
+    Pool -- "C. submit withdraw tx" --> Exec
+    Exec -- "D. verify on-chain" --> Program
+    Program -- "E. mark nullifier" --> Nullifiers
+    Program -- "F. payout" --> Recipient([Fresh Recipient Wallet])
+```
 
 ## 0. Status Implementasi Repo (Ringkasan)
 
@@ -10,7 +64,9 @@ Tabel di bawah memetakan setiap pilar arsitektur ke lokasi sumbernya di repo ini
 
 | Pilar | Lokasi | Status |
 |---|---|---|
-| BagsVault Anchor program | [`programs/bagsvault/`](../programs/bagsvault/) | ✅ Implementasi penuh (Merkle, nullifier, Groth16) |
+| BagsVault Anchor program | [`programs/bagsvault/`](../programs/bagsvault/) | ✅ Implementasi penuh (Merkle, nullifier, Groth16) + suite uji integrasi Rust di `programs/bagsvault/tests/` |
+| Rust integration tests | [`programs/bagsvault/tests/`](../programs/bagsvault/tests/) | ✅ `cargo test -p bagsvault` — initialize/deposit/withdraw/pause + double-spend smoke |
+| Sunspot CPI fallback | [`programs/bagsvault/src/sunspot.rs`](../programs/bagsvault/src/sunspot.rs) | 🟡 Stub — operator opt-in via `verifier_program` account; layout perlu konfirmasi sebelum mainnet |
 | Sirkuit Noir ZK | [`circuits/bagsvault_withdraw/`](../circuits/bagsvault_withdraw/) | ✅ Implementasi (perlu `nargo compile` + ceremony) |
 | IDL Anchor | [`idl/bagsvault.json`](../idl/bagsvault.json) | ✅ Dibundel — di-load oleh backend `AnchorDecoder` |
 | Backend ZK proof generator | [`backend/app/services/zk_proof_service.py`](../backend/app/services/zk_proof_service.py) | ✅ Orkestrasi nargo + bb (subprocess) |

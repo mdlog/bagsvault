@@ -30,3 +30,13 @@ ark-ff = { version = "0.4.0", default-features = false }
 [dev-dependencies]
 solana-program-test = "1.18"
 solana-sdk = "1.18"
+# Async runtime for the program-test BanksClient. Pinned to a feature set
+# small enough to keep the test build snappy.
+tokio = { version = "1.35", features = ["macros", "rt-multi-thread"] }
+
+# Wire up the integration test suite so `cargo test -p bagsvault` picks it
+# up automatically. Helpers live in `tests/common/` and are imported via
+# `mod common;` from each test file.
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

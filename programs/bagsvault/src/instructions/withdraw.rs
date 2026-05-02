@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 
 use crate::errors::BagsVaultError;
 use crate::state::{MerkleTreeState, Nullifier, WithdrawEvent};
+use crate::sunspot::verify_via_sunspot;
 use crate::verifier::{
     pubkey_to_field, u64_to_field, verify_withdraw_proof, NUM_PUBLIC_INPUTS,
 };
@@ -56,6 +57,15 @@ pub struct Withdraw<'info> {
     pub recipient_account: AccountInfo<'info>,
 
     pub system_program: Program<'info, anchor_lang::system_program::System>,
+
+    /// OPTIONAL — Sunspot verifier program (CPI fallback). When supplied,
+    /// the handler routes proof verification through `sunspot::verify_via_sunspot`
+    /// instead of the inline `verifier::verify_withdraw_proof` path.
+    /// Operators opt in by passing this account; omitting it preserves
+    /// the default in-program verifier behaviour. See `src/sunspot.rs`
+    /// for the layout assumption (still a stub — confirm before mainnet).
+    /// CHECK: validated lazily by the CPI itself; we only forward it.
+    pub verifier_program: Option<UncheckedAccount<'info>>,
 }
 
 pub fn handler(
@@ -86,7 +96,20 @@ pub fn handler(
     ];
 
     // 3. Groth16 verification. Returns InvalidProof on any failure.
-    verify_withdraw_proof(&proof, &public_inputs)?;
+    //    Two routes:
+    //      a) operator opted into the Sunspot CPI fallback by passing a
+    //         `verifier_program` account → forward to `sunspot::verify_via_sunspot`;
+    //      b) default → in-program `groth16-solana` verifier.
+    if let Some(verifier_program) = ctx.accounts.verifier_program.as_ref() {
+        verify_via_sunspot(
+            &verifier_program.to_account_info(),
+            &proof,
+            &public_inputs,
+            &[],
+        )?;
+    } else {
+        verify_withdraw_proof(&proof, &public_inputs)?;
+    }
 
     // 4. Persist nullifier. The Nullifier PDA is created by Anchor's
     //    `init` constraint above — its existence is the spent flag.

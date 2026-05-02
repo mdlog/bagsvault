@@ -1,0 +1,58 @@
+%% BagsVault — system architecture diagram (Mermaid)
+%% Mirrors docs/arsitektur-sistem.md Section 2 (four pillars) and
+%% Section 3 (deposit + withdrawal flows). One subgraph per pillar so
+%% the data-flow direction stays legible.
+flowchart LR
+    User([Creator / Supporter])
+
+    subgraph Compliance ["Privacy & Compliance Layer"]
+        direction TB
+        Range[Range Risk API<br/>compliance_service.py]
+        ZK[ZK Proof Generator<br/>zk_proof_service.py<br/>nargo + bb subprocess]
+        Compcache[(Mongo risk_scans<br/>TTL 30d)]
+        Range --- Compcache
+    end
+
+    subgraph BagsAPI ["Bags API Layer"]
+        direction TB
+        Trade[Trade Tokens API<br/>/trade/swap]
+        Claim[Claim Token Fees API<br/>/token-launch/claim-txs/v3]
+        FeeShare[Fee Share V2<br/>FEE2tBhCKAt7...]
+    end
+
+    subgraph Relayer ["Relayer Network"]
+        direction TB
+        Pool[Relayer Pool<br/>relayer_service.py]
+        Exec[Tx Executor<br/>tx_executor.py<br/>simulate→broadcast→confirm]
+        Pool --> Exec
+    end
+
+    subgraph Chain ["Smart Contract Layer (Solana)"]
+        direction TB
+        Program[BagsVault Program<br/>programs/bagsvault/]
+        Merkle[(Merkle Tree State<br/>BN254-Poseidon depth 20<br/>10-root rolling buffer)]
+        Nullifiers[(Nullifier PDAs<br/>1 per spent nullifier)]
+        Vault[(Vault PDA<br/>pooled SOL / SPL)]
+        Program --> Merkle
+        Program --> Nullifiers
+        Program --> Vault
+    end
+
+    %% Deposit flow (downward — collect funds, commit to tree)
+    User -- "1. claim/donate" --> Claim
+    Claim -- "2. settle" --> Trade
+    User -- "3. compliance check" --> Range
+    Range -- "ok" --> ZK
+    ZK -- "4. commitment = poseidon(secret, nullifier, amount)" --> Program
+    Program -- "5. insert leaf, update root" --> Merkle
+
+    %% Withdraw flow (upward — proof generation, gasless payout)
+    User -- "A. secret + path" --> ZK
+    ZK -- "B. groth16 proof" --> Pool
+    Pool -- "C. submit withdraw tx" --> Exec
+    Exec -- "D. verify on-chain" --> Program
+    Program -- "E. mark nullifier" --> Nullifiers
+    Program -- "F. payout" --> Recipient([Fresh Recipient Wallet])
+
+    classDef pillar fill:#f5f7fa,stroke:#334155,stroke-width:1px,color:#0f172a;
+    class Compliance,BagsAPI,Relayer,Chain pillar;

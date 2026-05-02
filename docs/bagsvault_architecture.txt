@@ -1,0 +1,39 @@
+BagsVault — system architecture (ASCII fallback for non-Mermaid viewers)
+=========================================================================
+
+                         ┌──────────────────────┐
+                         │  Creator / Supporter │
+                         └──────────┬───────────┘
+                                    │
+        ┌───────────────────────────┼─────────────────────────────┐
+        │ DEPOSIT path (down)       │   WITHDRAW path (up)        │
+        ▼                           │                             ▲
+┌───────────────────┐               │                  ┌──────────┴────────┐
+│ Bags API Layer    │               │                  │ Relayer Network   │
+│ ──────────────────│               │                  │ ──────────────────│
+│ trade/swap        │               │                  │ relayer pool      │
+│ claim-txs v3      │               │                  │ tx_executor       │
+│ Fee Share V2      │               │                  │ (sim → broadcast) │
+└───────┬───────────┘               │                  └──────────┬────────┘
+        │ tokens                    │                             │ tx
+        ▼                           ▼                             ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Privacy & Compliance Layer                                              │
+│ ─────────────────────────────────────────────────────────────────────── │
+│  Range Risk ──► risk_scans (TTL 30d)        ZK Proof Generator          │
+│   (gate)                                     (nargo + bb subprocess)    │
+└──────────────────────────────────┬──────────────────────────────────────┘
+                                   │ commitment / proof
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Smart Contract Layer (Solana — programs/bagsvault/)                     │
+│ ─────────────────────────────────────────────────────────────────────── │
+│  BagsVault Program  ─►  Merkle Tree (BN254-Poseidon, depth 20, 10 roots)│
+│                     ─►  Nullifier PDAs (1 per spent nullifier)          │
+│                     ─►  Vault PDA (pooled SOL / SPL)                    │
+└──────────────────────────────────┬──────────────────────────────────────┘
+                                   │ payout
+                                   ▼
+                         ┌──────────────────────┐
+                         │ Fresh Recipient      │
+                         └──────────────────────┘
