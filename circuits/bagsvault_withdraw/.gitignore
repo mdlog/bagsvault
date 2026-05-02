@@ -1,0 +1,11 @@
+# nargo / bb build artefacts. Regenerated locally — do not commit.
+# `target/` itself is tracked via the `.gitkeep` sentinel below so the
+# toolchain has a directory to write into on a fresh checkout.
+/target/*
+!/target/.gitkeep
+
+# Witness file produced by `nargo execute`.
+*.gz
+
+# Proof outputs from `bb prove` if dropped at the package root.
+/proof

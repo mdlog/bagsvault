@@ -1,13 +1,13 @@
 //! Groth16 verification helper for the BagsVault withdrawal proof.
 //!
-//! The verifying key was generated alongside the Noir circuit at
-//! `circuits/bagsvault_withdraw/` (see `circuits/bagsvault_withdraw/README.md`
-//! for the ceremony command). The bytes embedded below are placeholders —
-//! the build script substitutes them with the real BN254-encoded VK once
-//! `nargo` produces it. This keeps the program compileable in a fresh
-//! checkout while making the substitution surface explicit.
+//! The verifying key constants live in the sibling `verifier_vk` module
+//! so an operator can drop in the trusted-setup output without touching
+//! this file. After running the ceremony (see
+//! `circuits/bagsvault_withdraw/README.md`), `backend/scripts/build_vk.py
+//! convert` rewrites `verifier_vk.rs` with the real BN254-encoded VK.
 //!
-//! Public-input layout (must match `Prover.toml` ordering in the circuit):
+//! Public-input layout (must match `Prover.toml` ordering in the
+//! circuit):
 //!   1. `root`            — bytes32 BE, Merkle root committed to by the proof
 //!   2. `nullifier_hash`  — bytes32 BE
 //!   3. `recipient`       — pubkey, 32 BE bytes (Solana address as field)
@@ -18,22 +18,13 @@ use anchor_lang::prelude::*;
 use groth16_solana::groth16::Groth16Verifier;
 
 use crate::errors::BagsVaultError;
+use crate::verifier_vk::{VK_ALPHA_G1, VK_BETA_G2, VK_DELTA_G2, VK_GAMMA_G2, VK_IC};
 
-/// Number of public inputs the circuit exposes.
-pub const NUM_PUBLIC_INPUTS: usize = 5;
-
-/// Placeholder verifying key — replace with the trusted-setup output for
-/// `bagsvault_withdraw.r1cs`. Sizes match the `groth16-solana` layout:
-///   * vk_alpha_g1: 64 bytes
-///   * vk_beta_g2:  128 bytes
-///   * vk_gamma_g2: 128 bytes
-///   * vk_delta_g2: 128 bytes
-///   * vk_ic[i]:    64 bytes each (NUM_PUBLIC_INPUTS + 1 entries)
-pub const VK_ALPHA_G1: [u8; 64] = [0u8; 64];
-pub const VK_BETA_G2: [u8; 128] = [0u8; 128];
-pub const VK_GAMMA_G2: [u8; 128] = [0u8; 128];
-pub const VK_DELTA_G2: [u8; 128] = [0u8; 128];
-pub const VK_IC: [[u8; 64]; NUM_PUBLIC_INPUTS + 1] = [[0u8; 64]; NUM_PUBLIC_INPUTS + 1];
+// Re-export the public-input arity at the path callers already use
+// (`crate::verifier::NUM_PUBLIC_INPUTS`). The constant itself lives in
+// `verifier_vk.rs` so the build script regenerates it alongside the
+// VK byte arrays.
+pub use crate::verifier_vk::NUM_PUBLIC_INPUTS;
 
 /// Verify a Groth16 proof against the embedded VK and the supplied public
 /// inputs. Returns `Ok(())` only when the proof is valid.
@@ -89,4 +80,28 @@ pub fn u64_to_field(value: u64) -> [u8; 32] {
 /// this masking.
 pub fn pubkey_to_field(key: &Pubkey) -> [u8; 32] {
     key.to_bytes()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `vk_ic` must have exactly `NUM_PUBLIC_INPUTS + 1` entries (one
+    /// per input plus a constant). If a future circuit edit changes the
+    /// public-input count, the operator must re-run
+    /// `python backend/scripts/build_vk.py all` to regenerate
+    /// `verifier_vk.rs` — this test fails compilation if they forget.
+    #[test]
+    fn vk_ic_table_matches_public_input_count() {
+        assert_eq!(VK_IC.len(), NUM_PUBLIC_INPUTS + 1);
+    }
+
+    /// Sanity: the proof-bytes splitter rejects any length that isn't
+    /// the exact 256-byte Groth16 layout.
+    #[test]
+    fn rejects_proof_with_wrong_length() {
+        let public_inputs = [[0u8; 32]; NUM_PUBLIC_INPUTS];
+        assert!(verify_withdraw_proof(&[0u8; 128], &public_inputs).is_err());
+        assert!(verify_withdraw_proof(&[0u8; 257], &public_inputs).is_err());
+    }
 }

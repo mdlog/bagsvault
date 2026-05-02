@@ -1,0 +1,4 @@
+# Placeholder so `circuits/bagsvault_withdraw/target/` exists for the
+# toolchain on a fresh checkout. nargo / bb write build artefacts here;
+# the surrounding `.gitignore` keeps everything except this sentinel out
+# of version control.

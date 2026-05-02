@@ -29,6 +29,7 @@ pub mod instructions;
 pub mod merkle;
 pub mod state;
 pub mod verifier;
+pub mod verifier_vk;
 
 use instructions::*;
 
