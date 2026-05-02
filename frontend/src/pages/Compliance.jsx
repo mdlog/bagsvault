@@ -74,60 +74,54 @@ export default function Compliance() {
       : "text-red-500";
 
   const verdictColor =
-    result?.verdict === "APPROVE" ? "bg-[#14F195]/10 border-[#14F195]/40 text-[#14F195]"
+    result?.verdict === "APPROVE" ? "bg-[#14F195]/[0.08] border-[#14F195]/40 text-[#14F195]"
       : result?.verdict === "REVIEW" ? "bg-amber-500/10 border-amber-500/40 text-amber-400"
       : "bg-red-500/10 border-red-500/40 text-red-400";
 
   return (
-    <div className="relative max-w-[1400px] mx-auto px-6 lg:px-10 pt-12 pb-24">
-      <div className="absolute inset-x-0 top-0 h-[400px] radial-glow pointer-events-none" />
-
-      <div className="relative flex items-start justify-between gap-6 flex-wrap">
+    <div className="max-w-[1280px] mx-auto px-6 lg:px-8 pt-12 pb-20">
+      <div className="flex items-start justify-between gap-6 flex-wrap">
         <div>
-          <p className="text-[10px] font-mono uppercase tracking-[0.25em] text-[#14F195] mb-3">
-            / compliance · range risk
-          </p>
-          <h1 className="font-display font-bold text-4xl lg:text-5xl tracking-tight">
-            Wallet Risk Scoring
+          <p className="text-xs font-medium text-[#14F195] mb-2">Compliance · Range Risk</p>
+          <h1 className="text-2xl lg:text-3xl font-semibold tracking-tight">
+            Wallet risk scoring
           </h1>
-          <p className="text-zinc-400 mt-3 max-w-2xl text-sm leading-relaxed">
+          <p className="text-zinc-400 mt-2 max-w-2xl text-sm leading-relaxed">
             BagsVault screens every deposit via the Range Risk API. Sanctions, hacker
             clusters, mixer exposure, and illicit flows are blocked <span className="text-white">before</span> funds
             enter the privacy pool — giving the protocol regulatory legitimacy without sacrificing user privacy.
           </p>
         </div>
-        <div className="flex items-center gap-2 border border-white/10 px-4 h-11 font-mono text-xs text-zinc-500">
+        <div className="flex items-center gap-2 border border-white/10 px-3 h-9 rounded-md text-xs text-zinc-400">
           <Shield className="w-3.5 h-3.5 text-[#14F195]" /> Range Risk API · live
         </div>
       </div>
 
       {/* Scan */}
-      <div className="relative grid lg:grid-cols-5 gap-6 mt-10">
+      <div className="grid lg:grid-cols-5 gap-5 mt-8">
         <div className="lg:col-span-3 space-y-4">
-          <div className="border border-white/5 bg-[#0A0A0A] p-6 lg:p-8">
-            <label className="text-[10px] uppercase tracking-[0.25em] text-zinc-500 mb-3 block">
-              Solana address
-            </label>
+          <div className="border border-white/5 bg-[#0a0b0d] p-6 lg:p-7 rounded-md">
+            <label className="text-xs text-zinc-400 mb-2.5 block">Solana address</label>
             <div className="flex gap-2">
               <input
                 data-testid="compliance-address-input"
                 value={address}
                 onChange={(e) => setAddress(e.target.value)}
                 placeholder="Enter Solana wallet address to scan…"
-                className="flex-1 h-14 bg-black border border-white/10 focus:border-[#14F195] focus:outline-none px-4 font-mono text-xs text-white placeholder:text-zinc-700"
+                className="flex-1 h-12 bg-[#07080a] border border-white/10 focus:border-[#14F195]/50 focus:outline-none rounded-md px-3.5 font-mono text-xs text-white placeholder:text-zinc-700"
               />
               <button
                 data-testid="compliance-scan-btn"
                 onClick={() => scan(address)}
                 disabled={loading}
-                className="h-14 px-6 bg-white text-black font-semibold hover:bg-zinc-200 transition-colors disabled:opacity-50 flex items-center gap-2"
+                className="h-12 px-5 bg-white text-black rounded-md font-medium text-sm hover:bg-zinc-200 transition-colors disabled:opacity-50 flex items-center gap-2"
               >
                 {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-                Run Scan
+                Run scan
               </button>
             </div>
-            <div className="flex items-center gap-2 mt-4 flex-wrap">
-              <span className="text-[10px] uppercase tracking-[0.25em] text-zinc-600">try demo:</span>
+            <div className="flex items-center gap-2 mt-3 flex-wrap">
+              <span className="text-[11px] text-zinc-500">Try demo:</span>
               {DEMO_WALLETS.map((d) => (
                 <button
                   key={d.address}
@@ -136,7 +130,7 @@ export default function Compliance() {
                     setAddress(d.address);
                     scan(d.address);
                   }}
-                  className="text-[10px] font-mono px-2.5 py-1 border border-white/10 hover:border-white/30 text-zinc-400 hover:text-white"
+                  className="text-[11px] px-2.5 py-1 border border-white/10 rounded-md hover:border-white/25 text-zinc-400 hover:text-white transition-colors"
                 >
                   {d.label}
                 </button>
@@ -146,31 +140,31 @@ export default function Compliance() {
 
           {/* Result */}
           {result && (
-            <div className="border border-white/5 bg-[#0A0A0A] p-6 lg:p-8 animate-fade-up space-y-6">
+            <div className="border border-white/5 bg-[#0a0b0d] p-6 lg:p-7 rounded-md animate-fade-up space-y-6">
               <div className="flex items-start justify-between gap-4 flex-wrap">
                 <div>
-                  <p className="text-[10px] uppercase tracking-[0.25em] text-zinc-500 mb-1">Scanned</p>
+                  <p className="text-xs text-zinc-500 mb-1">Scanned</p>
                   <p className="font-mono text-xs text-white break-all">{result.address}</p>
                 </div>
-                <div className={`px-4 h-10 inline-flex items-center border font-mono text-xs uppercase tracking-[0.2em] ${verdictColor}`}>
-                  {result.verdict === "APPROVE" && <CheckCircle2 className="w-3.5 h-3.5 mr-2" />}
-                  {result.verdict === "REVIEW" && <AlertTriangle className="w-3.5 h-3.5 mr-2" />}
-                  {result.verdict === "BLOCK" && <XCircle className="w-3.5 h-3.5 mr-2" />}
+                <div className={`px-3 h-9 inline-flex items-center rounded-md border text-xs font-medium ${verdictColor}`}>
+                  {result.verdict === "APPROVE" && <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />}
+                  {result.verdict === "REVIEW" && <AlertTriangle className="w-3.5 h-3.5 mr-1.5" />}
+                  {result.verdict === "BLOCK" && <XCircle className="w-3.5 h-3.5 mr-1.5" />}
                   {result.verdict}
                 </div>
               </div>
 
               <div>
-                <div className="flex items-end gap-4 mb-3">
-                  <p className={`font-display font-bold text-6xl ${scoreColor}`}>{result.score}</p>
-                  <div className="pb-3">
+                <div className="flex items-end gap-3 mb-2.5">
+                  <p className={`text-5xl font-semibold tracking-tight ${scoreColor}`}>{result.score}</p>
+                  <div className="pb-2">
                     <p className="text-xs text-zinc-500">risk score</p>
-                    <p className="text-[10px] font-mono text-zinc-600">0 (clean) · 100 (critical)</p>
+                    <p className="text-[10px] text-zinc-600">0 (clean) · 100 (critical)</p>
                   </div>
                 </div>
-                <div className="w-full h-2 bg-white/5 relative">
+                <div className="w-full h-2 bg-white/5 rounded-full overflow-hidden">
                   <div
-                    className="absolute inset-y-0 left-0 transition-all"
+                    className="h-full transition-all"
                     style={{
                       width: `${result.score}%`,
                       background: result.score < 20
@@ -184,8 +178,8 @@ export default function Compliance() {
               </div>
 
               {result.flags.length > 0 && (
-                <div className="border border-red-500/30 bg-red-500/[0.04] p-4">
-                  <p className="text-[10px] uppercase tracking-[0.25em] text-red-400 mb-2">Flags detected</p>
+                <div className="border border-red-500/30 bg-red-500/[0.04] rounded-md p-3.5">
+                  <p className="text-[11px] font-medium text-red-400 mb-2">Flags detected</p>
                   <ul className="text-sm text-red-400 space-y-1">
                     {result.flags.map((f) => (
                       <li key={f} className="flex items-center gap-2">
@@ -197,21 +191,19 @@ export default function Compliance() {
               )}
 
               <div>
-                <p className="text-[10px] uppercase tracking-[0.25em] text-zinc-500 mb-4">
-                  Detection Matrix
-                </p>
+                <p className="text-xs font-medium text-zinc-300 mb-3">Detection matrix</p>
                 <div className="grid sm:grid-cols-2 gap-2">
                   {result.checks.map((c) => (
                     <div
                       key={c.label}
-                      className={`flex items-center justify-between p-3 border ${
+                      className={`flex items-center justify-between p-3 rounded-md border ${
                         c.status === "flagged"
-                          ? "border-red-500/30 bg-red-500/[0.03]"
-                          : "border-white/5 bg-black"
+                          ? "border-red-500/30 bg-red-500/[0.04]"
+                          : "border-white/5 bg-[#07080a]"
                       }`}
                     >
                       <div>
-                        <p className="text-[10px] font-mono uppercase text-zinc-600">{c.category}</p>
+                        <p className="text-[10px] text-zinc-500">{c.category}</p>
                         <p className="text-xs text-zinc-300 mt-0.5">{c.label}</p>
                       </div>
                       {c.status === "clean" ? (
@@ -229,9 +221,9 @@ export default function Compliance() {
 
         {/* Side: stats */}
         <div className="lg:col-span-2 space-y-4">
-          <div className="border border-white/5 bg-[#0A0A0A] p-6">
-            <div className="flex items-center justify-between mb-5">
-              <p className="text-[10px] uppercase tracking-[0.25em] text-zinc-500">Protocol Stats</p>
+          <div className="border border-white/5 bg-[#0a0b0d] p-5 rounded-md">
+            <div className="flex items-center justify-between mb-4">
+              <p className="text-xs font-medium text-zinc-300">Protocol stats</p>
               <Activity className="w-4 h-4 text-[#14F195]" />
             </div>
             {[
@@ -241,22 +233,22 @@ export default function Compliance() {
               ["Blocks", "16 · 0.49%"],
               ["False positives", "0.02%"],
             ].map(([k, v]) => (
-              <div key={k} className="flex items-center justify-between py-3 border-b border-white/5 last:border-0 text-sm">
+              <div key={k} className="flex items-center justify-between py-2.5 border-b border-white/5 last:border-0 text-sm">
                 <span className="text-zinc-500">{k}</span>
                 <span className="text-white font-mono">{v}</span>
               </div>
             ))}
           </div>
 
-          <div className="border border-[#14F195]/30 bg-gradient-to-b from-[#14F195]/[0.04] to-transparent p-6">
+          <div className="border border-[#14F195]/30 bg-[#14F195]/[0.04] rounded-md p-5">
             <FileCheck className="w-5 h-5 text-[#14F195] mb-3" />
-            <p className="font-display text-lg">Privacy meets compliance.</p>
+            <p className="text-base font-semibold">Privacy meets compliance.</p>
             <p className="text-xs text-zinc-400 mt-2 leading-relaxed">
               Pre-deposit screening blocks illicit funds without KYC. Users prove
               their right to privacy without exposing their identity — and the
               protocol stays reputable enough to remain institutional-friendly.
             </p>
-            <p className="text-[10px] font-mono text-zinc-600 mt-4">
+            <p className="text-[11px] text-zinc-600 mt-3">
               Inspired by Range Security's Solana Privacy Hack winner architecture.
             </p>
           </div>

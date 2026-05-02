@@ -12,7 +12,7 @@ import Architecture from "@/pages/Architecture";
 
 function App() {
   return (
-    <div className="App min-h-screen bg-[#050505] text-white">
+    <div className="App min-h-screen bg-[#07080a] text-white">
       <WalletProvider>
         <BrowserRouter>
           <Routes>
@@ -31,10 +31,10 @@ function App() {
           position="bottom-right"
           toastOptions={{
             style: {
-              background: "#0A0A0A",
+              background: "#0c0d10",
               border: "1px solid rgba(255,255,255,0.08)",
               color: "#fff",
-              fontFamily: "Outfit, sans-serif",
+              borderRadius: "8px",
             },
           }}
         />
