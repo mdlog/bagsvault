@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { useWallet } from "@/context/WalletContext";
 import {
   Shield,
   Lock,
@@ -10,6 +11,7 @@ import {
   EyeOff,
   Cpu,
   FileKey,
+  LayoutDashboard,
 } from "lucide-react";
 
 const Stat = ({ label, value, suffix }) => (
@@ -53,6 +55,15 @@ const FlowStep = ({ n, title, desc, mono }) => (
 );
 
 export default function Landing() {
+  const { wallet, connect } = useWallet();
+  // When the user is already connected, route the primary CTA to their
+  // dashboard so the landing page degrades gracefully into a brief
+  // marketing surface — no need to re-pitch the protocol.
+  const primaryCtaTo = wallet ? "/dashboard" : "/deposit";
+  const primaryCtaLabel = wallet ? "Open dashboard" : "Launch app";
+  const primaryCtaIcon = wallet ? LayoutDashboard : ArrowRight;
+  const PrimaryIcon = primaryCtaIcon;
+
   return (
     <div>
       {/* HERO */}
@@ -78,13 +89,22 @@ export default function Landing() {
 
           <div className="flex flex-wrap items-center gap-3 mt-8">
             <Link
-              to="/deposit"
+              to={primaryCtaTo}
               data-testid="hero-launch-app-btn"
               className="inline-flex items-center gap-2 bg-white text-black h-10 px-5 rounded-md text-sm font-medium hover:bg-zinc-200 transition-colors"
             >
-              Launch app
-              <ArrowRight className="w-4 h-4" />
+              {primaryCtaLabel}
+              <PrimaryIcon className="w-4 h-4" />
             </Link>
+            {!wallet && (
+              <button
+                onClick={() => connect()}
+                data-testid="hero-connect-btn"
+                className="inline-flex items-center gap-2 h-10 px-5 rounded-md border border-[#14F195]/40 text-[#14F195] hover:bg-[#14F195]/[0.05] transition-colors text-sm font-medium"
+              >
+                Connect wallet
+              </button>
+            )}
             <Link
               to="/architecture"
               data-testid="hero-architecture-btn"
@@ -320,11 +340,12 @@ export default function Landing() {
                 </p>
                 <div className="flex flex-wrap gap-3 mt-6">
                   <Link
-                    to="/deposit"
+                    to={primaryCtaTo}
                     data-testid="cta-deposit-btn"
                     className="inline-flex items-center gap-2 bg-white text-black h-10 px-5 rounded-md text-sm font-medium hover:bg-zinc-200 transition-colors"
                   >
-                    Deposit now <ArrowRight className="w-4 h-4" />
+                    {wallet ? "Open dashboard" : "Deposit now"}{" "}
+                    <ArrowRight className="w-4 h-4" />
                   </Link>
                   <Link
                     to="/compliance"

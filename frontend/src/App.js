@@ -4,6 +4,7 @@ import { Toaster } from "sonner";
 import { WalletProvider } from "@/context/WalletContext";
 import Layout from "@/components/Layout";
 import Landing from "@/pages/Landing";
+import Dashboard from "@/pages/Dashboard";
 import Deposit from "@/pages/Deposit";
 import Withdraw from "@/pages/Withdraw";
 import Relayers from "@/pages/Relayers";
@@ -18,6 +19,7 @@ function App() {
           <Routes>
             <Route element={<Layout />}>
               <Route path="/" element={<Landing />} />
+              <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/deposit" element={<Deposit />} />
               <Route path="/withdraw" element={<Withdraw />} />
               <Route path="/relayers" element={<Relayers />} />

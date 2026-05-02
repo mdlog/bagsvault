@@ -3,22 +3,158 @@ import { useState, useEffect } from "react";
 import { useWallet } from "@/context/WalletContext";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Shield, Menu, X, Copy, LogOut } from "lucide-react";
+import { Shield, Menu, X, Copy, LogOut, LayoutDashboard } from "lucide-react";
 
-const NAV = [
-  { to: "/deposit", label: "Deposit" },
-  { to: "/withdraw", label: "Withdraw" },
-  { to: "/relayers", label: "Relayers" },
-  { to: "/compliance", label: "Compliance" },
-  { to: "/architecture", label: "Architecture" },
+// Primary navigation. The "feature" group is the protocol surface
+// (Deposit, Withdraw); "network" is the supporting infra
+// (Relayers, Compliance). Architecture / docs live in the footer to
+// keep the navbar focused on actionable pages.
+const NAV_FEATURES = [
+  { to: "/deposit", label: "Deposit", desc: "Add tokens to the pool" },
+  { to: "/withdraw", label: "Withdraw", desc: "Claim anonymously" },
+];
+const NAV_NETWORK = [
+  { to: "/relayers", label: "Relayers", desc: "Gas-paying nodes" },
+  { to: "/compliance", label: "Compliance", desc: "Range Risk scans" },
 ];
 
 // `ConnectModal` is intentionally removed — the real wallet adapter
 // ships its own modal via `WalletModalProvider` and the
 // `useWalletModal().setVisible(true)` hook (called by `connect()`),
 // which auto-discovers installed wallets via the wallet-standard.
-// `Dialog` and `DialogContent` imports are kept above because other
-// pages still use them — no-op here.
+
+// Dashboard link only renders when the user has a connected wallet.
+// Highlights as a primary action so the connected user immediately
+// sees their pool overview entry-point.
+const DashboardNavLink = () => {
+  const { wallet } = useWallet();
+  if (!wallet) return null;
+  return (
+    <NavLink
+      to="/dashboard"
+      data-testid="nav-dashboard"
+      className={({ isActive }) =>
+        `inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md transition-colors ${
+          isActive
+            ? "text-[#14F195] bg-[#14F195]/[0.08] border border-[#14F195]/25"
+            : "text-zinc-300 hover:text-white hover:bg-white/[0.03] border border-transparent"
+        }`
+      }
+    >
+      <LayoutDashboard className="w-3.5 h-3.5" />
+      Dashboard
+    </NavLink>
+  );
+};
+
+// Compact dropdown grouping a small set of related routes. Hover- /
+// focus-driven; the menu inherits the existing dark styling.
+const NavGroup = ({ label, items }) => {
+  const [open, setOpen] = useState(false);
+  const location = useLocation();
+  const activeChild = items.some((i) => location.pathname.startsWith(i.to));
+  return (
+    <div
+      className="relative"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <button
+        data-testid={`nav-group-${label.toLowerCase()}`}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+          activeChild
+            ? "text-white bg-white/[0.06]"
+            : "text-zinc-400 hover:text-white hover:bg-white/[0.03]"
+        }`}
+      >
+        {label}
+      </button>
+      {open && (
+        <div className="absolute left-0 top-9 w-60 bg-[#0c0d10] border border-white/10 rounded-md shadow-xl overflow-hidden z-50">
+          {items.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              data-testid={`nav-${item.label.toLowerCase()}`}
+              className={({ isActive }) =>
+                `block px-3.5 py-3 hover:bg-white/[0.03] transition-colors border-b border-white/5 last:border-0 ${
+                  isActive ? "bg-white/[0.05]" : ""
+                }`
+              }
+            >
+              <p className="text-sm text-white">{item.label}</p>
+              <p className="text-[11px] text-zinc-500 mt-0.5">{item.desc}</p>
+            </NavLink>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Mobile drawer rendered below the navbar. Keeps the same grouped
+// structure as desktop so the IA stays consistent.
+const MobileNav = () => {
+  const { wallet } = useWallet();
+  return (
+    <div className="lg:hidden border-t border-white/5 bg-[#07080a]">
+      {wallet && (
+        <NavLink
+          to="/dashboard"
+          className={({ isActive }) =>
+            `block px-6 py-3.5 border-b border-white/5 text-sm ${
+              isActive ? "text-[#14F195] bg-[#14F195]/[0.06]" : "text-zinc-300"
+            }`
+          }
+        >
+          Dashboard
+        </NavLink>
+      )}
+      <p className="px-6 pt-3 pb-1 text-[10px] uppercase tracking-wider text-zinc-600">
+        Protocol
+      </p>
+      {NAV_FEATURES.map((n) => (
+        <NavLink
+          key={n.to}
+          to={n.to}
+          className={({ isActive }) =>
+            `block px-6 py-3 text-sm ${
+              isActive ? "text-white bg-white/[0.04]" : "text-zinc-400"
+            }`
+          }
+        >
+          {n.label}
+          <span className="block text-[11px] text-zinc-600 mt-0.5">{n.desc}</span>
+        </NavLink>
+      ))}
+      <p className="px-6 pt-3 pb-1 text-[10px] uppercase tracking-wider text-zinc-600 border-t border-white/5">
+        Network
+      </p>
+      {NAV_NETWORK.map((n) => (
+        <NavLink
+          key={n.to}
+          to={n.to}
+          className={({ isActive }) =>
+            `block px-6 py-3 text-sm ${
+              isActive ? "text-white bg-white/[0.04]" : "text-zinc-400"
+            }`
+          }
+        >
+          {n.label}
+          <span className="block text-[11px] text-zinc-600 mt-0.5">{n.desc}</span>
+        </NavLink>
+      ))}
+      <NavLink
+        to="/architecture"
+        className="block px-6 py-3 text-sm text-zinc-500 border-t border-white/5"
+      >
+        Architecture & docs
+      </NavLink>
+    </div>
+  );
+};
 
 const WalletPill = () => {
   const { wallet, balance, connect, disconnect, connecting } = useWallet();
@@ -113,22 +249,9 @@ export default function Layout() {
           </Link>
 
           <nav className="hidden lg:flex items-center gap-1">
-            {NAV.map((n) => (
-              <NavLink
-                key={n.to}
-                to={n.to}
-                data-testid={`nav-${n.label.toLowerCase()}`}
-                className={({ isActive }) =>
-                  `px-3 py-1.5 text-sm rounded-md transition-colors ${
-                    isActive
-                      ? "text-white bg-white/[0.06]"
-                      : "text-zinc-400 hover:text-white hover:bg-white/[0.03]"
-                  }`
-                }
-              >
-                {n.label}
-              </NavLink>
-            ))}
+            <DashboardNavLink />
+            <NavGroup label="Protocol" items={NAV_FEATURES} />
+            <NavGroup label="Network" items={NAV_NETWORK} />
           </nav>
 
           <div className="flex items-center gap-2">
@@ -146,23 +269,7 @@ export default function Layout() {
             </button>
           </div>
         </div>
-        {mobile && (
-          <div className="lg:hidden border-t border-white/5 bg-[#07080a]">
-            {NAV.map((n) => (
-              <NavLink
-                key={n.to}
-                to={n.to}
-                className={({ isActive }) =>
-                  `block px-6 py-3.5 border-b border-white/5 text-sm ${
-                    isActive ? "text-white bg-white/[0.04]" : "text-zinc-400"
-                  }`
-                }
-              >
-                {n.label}
-              </NavLink>
-            ))}
-          </div>
-        )}
+        {mobile && <MobileNav />}
       </header>
 
       <main className="flex-1" data-testid="main-content">
@@ -190,19 +297,47 @@ export default function Layout() {
           <div>
             <p className="text-xs font-medium text-zinc-300 mb-3">Protocol</p>
             <ul className="space-y-2 text-sm text-zinc-500">
+              <li><Link to="/dashboard" className="hover:text-white transition-colors">Dashboard</Link></li>
               <li><Link to="/deposit" className="hover:text-white transition-colors">Deposit</Link></li>
               <li><Link to="/withdraw" className="hover:text-white transition-colors">Withdraw</Link></li>
               <li><Link to="/relayers" className="hover:text-white transition-colors">Relayer network</Link></li>
-              <li><Link to="/architecture" className="hover:text-white transition-colors">Architecture</Link></li>
+              <li><Link to="/compliance" className="hover:text-white transition-colors">Compliance</Link></li>
             </ul>
           </div>
           <div>
             <p className="text-xs font-medium text-zinc-300 mb-3">Resources</p>
             <ul className="space-y-2 text-sm text-zinc-500">
-              <li><a href="#" className="hover:text-white transition-colors">Documentation</a></li>
-              <li><a href="#" className="hover:text-white transition-colors">ZK circuits (Noir)</a></li>
-              <li><a href="#" className="hover:text-white transition-colors">Bags API</a></li>
-              <li><a href="#" className="hover:text-white transition-colors">Security audit</a></li>
+              <li><Link to="/architecture" className="hover:text-white transition-colors">Architecture &amp; docs</Link></li>
+              <li>
+                <a
+                  href="https://github.com/mdlog/bagsvault"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-white transition-colors"
+                >
+                  GitHub
+                </a>
+              </li>
+              <li>
+                <a
+                  href="https://noir-lang.org/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-white transition-colors"
+                >
+                  ZK circuits (Noir)
+                </a>
+              </li>
+              <li>
+                <a
+                  href="https://docs.bags.fm/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-white transition-colors"
+                >
+                  Bags API
+                </a>
+              </li>
             </ul>
           </div>
         </div>

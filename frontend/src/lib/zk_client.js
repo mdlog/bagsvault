@@ -144,3 +144,31 @@ export async function getAnonymityState() {
 export async function getMerklePath(leafIndex) {
   return apiGet(`/api/anonymity/merkle-path?leaf_index=${encodeURIComponent(leafIndex)}`);
 }
+
+// ----------------------------------------------------------------------
+// Dashboard fetchers (read-only pool stats — never user-specific, never
+// leak per-wallet history because the privacy contract forbids it).
+// ----------------------------------------------------------------------
+export async function getRecentDeposits(limit = 10) {
+  return apiGet(`/api/deposits/recent?limit=${limit}`);
+}
+
+export async function getRecentWithdrawals(limit = 10) {
+  return apiGet(`/api/withdrawals/recent?limit=${limit}`);
+}
+
+export async function getRelayers() {
+  return apiGet("/api/relayers");
+}
+
+export async function getComplianceStats() {
+  return apiGet("/api/compliance/stats");
+}
+
+export async function getHealth() {
+  return apiGet("/api/health");
+}
+
+export async function getMerkleRoots() {
+  return apiGet("/api/merkle/root");
+}
