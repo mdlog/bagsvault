@@ -6,8 +6,9 @@ from fastapi import APIRouter, FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.database import close_db
-from app.routers import root, status
+from app.database import close_db, ensure_indexes
+from app.exceptions import register_exception_handlers
+from app.routers import bags, compliance, health, root, status, tokens
 
 logging.basicConfig(
     level=settings.log_level,
@@ -18,7 +19,12 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    logger.info("Starting BagsVault backend (db=%s)", settings.db_name)
+    logger.info(
+        "Starting BagsVault backend (db=%s, cluster=%s)",
+        settings.db_name,
+        settings.solana_cluster,
+    )
+    await ensure_indexes()
     yield
     await close_db()
     logger.info("Mongo client closed")
@@ -39,7 +45,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+register_exception_handlers(app)
+
 api_router = APIRouter(prefix="/api")
 api_router.include_router(root.router)
+api_router.include_router(health.router)
 api_router.include_router(status.router)
+api_router.include_router(compliance.router)
+api_router.include_router(bags.router)
+api_router.include_router(tokens.router)
 app.include_router(api_router)

@@ -30,8 +30,13 @@ warn_unreachable = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["motor.*"]
+# Motor's distributed type stubs are incomplete (collection-attribute access on
+# AsyncIOMotorDatabase trips attr-defined and __getitem__ trips index). Treat
+# motor as untyped so callers can use the documented `db.collection_name`
+# pattern without per-line ignores.
+module = ["motor.*", "anchorpy.*", "respx.*"]
 ignore_missing_imports = true
+follow_imports = "skip"
 
 [tool.pytest.ini_options]
 minversion = "8.0"
