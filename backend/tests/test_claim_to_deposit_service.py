@@ -23,7 +23,7 @@ from app.exceptions import ServiceUnavailableError
 from app.services.claim_to_deposit_service import ClaimToDepositService
 
 
-PROGRAM_ID_STR = "BAGSVau1tProgram11111111111111111111111111111"
+PROGRAM_ID_STR = "AXEc2HCqETrPqzdG8AkErLxfNXDHyeH4cwykvX6qxXvJ"
 CREATOR_STR = "11111111111111111111111111111114"
 TOKEN_MINT_STR = "11111111111111111111111111111115"
 COMMITMENT_HEX = "0x" + ("cd" * 32)

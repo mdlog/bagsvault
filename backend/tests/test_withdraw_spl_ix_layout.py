@@ -25,7 +25,7 @@ from app.services.withdrawal_service import (
 )
 
 
-PROGRAM_ID = Pubkey.from_string("BAGSVau1tProgram11111111111111111111111111111")
+PROGRAM_ID = Pubkey.from_string("AXEc2HCqETrPqzdG8AkErLxfNXDHyeH4cwykvX6qxXvJ")
 TOKEN_MINT = Pubkey.from_string("So11111111111111111111111111111111111111112")  # any non-system mint
 
 

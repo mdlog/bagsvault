@@ -6,10 +6,10 @@ seeds = false
 skip-lint = false
 
 [programs.localnet]
-bagsvault = "BAGSVau1tProgram11111111111111111111111111111"
+bagsvault = "AXEc2HCqETrPqzdG8AkErLxfNXDHyeH4cwykvX6qxXvJ"
 
 [programs.devnet]
-bagsvault = "BAGSVau1tProgram11111111111111111111111111111"
+bagsvault = "AXEc2HCqETrPqzdG8AkErLxfNXDHyeH4cwykvX6qxXvJ"
 
 [registry]
 url = "https://api.apr.dev"

@@ -204,6 +204,6 @@
     { "code": 6007, "name": "FeeBpsTooHigh", "msg": "Relayer fee bps exceeds the 10% protocol cap." }
   ],
   "metadata": {
-    "address": "BAGSVau1tProgram11111111111111111111111111111"
+    "address": "AXEc2HCqETrPqzdG8AkErLxfNXDHyeH4cwykvX6qxXvJ"
   }
 }

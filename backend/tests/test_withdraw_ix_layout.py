@@ -29,7 +29,7 @@ from app.services.withdrawal_service import (
 )
 
 
-PROGRAM_ID = Pubkey.from_string("BAGSVau1tProgram11111111111111111111111111111")
+PROGRAM_ID = Pubkey.from_string("AXEc2HCqETrPqzdG8AkErLxfNXDHyeH4cwykvX6qxXvJ")
 
 
 def test_withdraw_sighash_matches_anchor_naming() -> None:

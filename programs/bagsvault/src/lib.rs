@@ -41,7 +41,7 @@ pub mod verifier_vk;
 
 use instructions::*;
 
-declare_id!("BAGSVau1tProgram11111111111111111111111111111");
+declare_id!("AXEc2HCqETrPqzdG8AkErLxfNXDHyeH4cwykvX6qxXvJ");
 
 #[program]
 pub mod bagsvault {
