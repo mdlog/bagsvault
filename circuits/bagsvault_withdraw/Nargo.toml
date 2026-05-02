@@ -1,0 +1,7 @@
+[package]
+name = "bagsvault_withdraw"
+type = "bin"
+authors = ["BagsVault contributors"]
+compiler_version = ">=0.31.0"
+
+[dependencies]

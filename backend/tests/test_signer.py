@@ -112,3 +112,89 @@ def test_sign_transaction_accepts_versioned_tx(relayer_keypair_file: Path) -> No
     re_signed = signer.sign_transaction(unsigned)
     tx = VersionedTransaction.from_bytes(re_signed)
     assert tx.message.account_keys[0] == relayer_pubkey
+
+
+# ----------------------------------------------------------------------
+# Multi-keypair rotation (Phase 3 hot-wallet pool)
+# ----------------------------------------------------------------------
+def _write_kp(path: Path) -> Keypair:
+    kp = Keypair()
+    path.write_text(json.dumps(list(bytes(kp))))
+    return kp
+
+
+def test_signer_pool_rotates_pubkey_round_robin(tmp_path: Path) -> None:
+    """``pubkey()`` cycles through every configured keypair."""
+
+    paths = [tmp_path / f"kp{i}.json" for i in range(3)]
+    expected = [str(_write_kp(p).pubkey()) for p in paths]
+
+    signer = SolanaSignerClient(keypair_paths=paths)
+
+    # Six calls -> two full rotations.
+    rotated = [signer.pubkey() for _ in range(6)]
+    assert rotated == expected + expected
+
+
+def test_signer_pool_pubkeys_returns_all_in_order(tmp_path: Path) -> None:
+    paths = [tmp_path / f"kp{i}.json" for i in range(2)]
+    expected = [str(_write_kp(p).pubkey()) for p in paths]
+
+    signer = SolanaSignerClient(keypair_paths=paths)
+    assert signer.pubkeys() == expected
+
+
+def test_signer_single_keypair_pubkeys_returns_one(relayer_keypair_file: Path) -> None:
+    signer = SolanaSignerClient(keypair_path=relayer_keypair_file)
+    pubs = signer.pubkeys()
+    assert len(pubs) == 1
+    assert pubs[0] == signer.pubkey()
+
+
+def test_signer_pool_sign_transaction_uses_rotation(tmp_path: Path) -> None:
+    """``sign_transaction`` advances the pool cursor and signs with the next kp."""
+
+    paths = [tmp_path / f"kp{i}.json" for i in range(2)]
+    keypairs = [_write_kp(p) for p in paths]
+
+    signer = SolanaSignerClient(keypair_paths=paths)
+
+    # First call should sign with keypairs[0], second with keypairs[1].
+    # Build an empty tx whose message accounts come from the first kp.
+    blockhash_b58 = str(Hash.default())
+    ix0 = Instruction(
+        program_id=Pubkey.default(),
+        accounts=[AccountMeta(pubkey=keypairs[0].pubkey(), is_signer=True, is_writable=True)],
+        data=b"a",
+    )
+    ix1 = Instruction(
+        program_id=Pubkey.default(),
+        accounts=[AccountMeta(pubkey=keypairs[1].pubkey(), is_signer=True, is_writable=True)],
+        data=b"b",
+    )
+    # Tell the signer the payer explicitly so it doesn't fall back to
+    # the rotation cursor for the payer slot.
+    bytes0 = signer.build_and_sign(
+        instructions=[ix0], recent_blockhash=blockhash_b58, payer=keypairs[0].pubkey()
+    )
+    bytes1 = signer.build_and_sign(
+        instructions=[ix1], recent_blockhash=blockhash_b58, payer=keypairs[1].pubkey()
+    )
+    tx0 = VersionedTransaction.from_bytes(bytes0)
+    tx1 = VersionedTransaction.from_bytes(bytes1)
+    assert tx0.message.account_keys[0] == keypairs[0].pubkey()
+    assert tx1.message.account_keys[0] == keypairs[1].pubkey()
+
+
+def test_signer_pool_falls_back_when_paths_list_empty(
+    relayer_keypair_file: Path,
+) -> None:
+    """Empty ``keypair_paths`` should not break the legacy single-keypair path."""
+
+    signer = SolanaSignerClient(
+        keypair_path=relayer_keypair_file, keypair_paths=[]
+    )
+    # Empty list is falsy → single-keypair behaviour kicks in.
+    pub_a = signer.pubkey()
+    pub_b = signer.pubkey()
+    assert pub_a == pub_b

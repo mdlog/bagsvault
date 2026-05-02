@@ -1,0 +1,25 @@
+# Sample prover input for the BagsVault withdrawal circuit.
+# Replace the placeholders with real witness values produced by
+# `backend/app/services/zk_proof_service.py`.
+
+# Public inputs
+root = "0x0000000000000000000000000000000000000000000000000000000000000000"
+nullifier_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
+recipient = "0x0000000000000000000000000000000000000000000000000000000000000000"
+amount = "1000000000"
+relayer = "0x0000000000000000000000000000000000000000000000000000000000000000"
+
+# Private inputs (witness)
+nullifier = "0x01"
+secret = "0x02"
+leaf_index = "0"
+merkle_path = [
+  "0x0", "0x0", "0x0", "0x0", "0x0", "0x0", "0x0", "0x0",
+  "0x0", "0x0", "0x0", "0x0", "0x0", "0x0", "0x0", "0x0",
+  "0x0", "0x0", "0x0", "0x0",
+]
+is_left = [
+  "1", "1", "1", "1", "1", "1", "1", "1",
+  "1", "1", "1", "1", "1", "1", "1", "1",
+  "1", "1", "1", "1",
+]

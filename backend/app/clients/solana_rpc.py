@@ -354,6 +354,81 @@ class SolanaRpcClient:
             )
         return result
 
+    async def simulate_transaction(
+        self,
+        signed_tx_b64: str,
+        replace_recent_blockhash: bool = False,
+    ) -> dict[str, Any]:
+        """Simulate a base64-encoded signed transaction without broadcasting.
+
+        Wraps the ``simulateTransaction`` JSON-RPC method with
+        ``encoding="base64"``. Returns the inner ``value`` dict — a payload
+        of the form
+        ``{"err": ..., "logs": [...], "unitsConsumed": int|None,
+        "returnData": ...|None, "accounts": ...}``. Callers inspect
+        ``value["err"]`` to decide whether the simulation succeeded.
+
+        ``replace_recent_blockhash`` lets the node substitute a fresh
+        blockhash before simulating, useful when the supplied tx may be
+        stale but the caller only cares about logical validity.
+        """
+
+        config: dict[str, Any] = {
+            "encoding": "base64",
+            "commitment": self._commitment,
+            "replaceRecentBlockhash": replace_recent_blockhash,
+        }
+        params: list[Any] = [signed_tx_b64, config]
+        result = await self._call("simulateTransaction", params)
+        if not isinstance(result, dict):
+            raise UpstreamError(
+                "Solana RPC simulateTransaction returned non-dict result.",
+                details={"upstream": "solana_rpc", "result_type": type(result).__name__},
+            )
+        value = result.get("value")
+        if not isinstance(value, dict):
+            raise UpstreamError(
+                "Solana RPC simulateTransaction returned non-dict value.",
+                details={"upstream": "solana_rpc", "value_type": type(value).__name__},
+            )
+        return value
+
+    async def get_signature_statuses(
+        self,
+        signatures: list[str],
+        search_transaction_history: bool = False,
+    ) -> list[dict[str, Any] | None]:
+        """Return per-signature confirmation status (positional ordering).
+
+        Wraps the ``getSignatureStatuses`` JSON-RPC method. Each list slot
+        is either ``None`` (signature unknown to the node) or a dict of the
+        form
+        ``{"slot": int, "confirmations": int|None,
+        "confirmationStatus": "processed"|"confirmed"|"finalized"|None,
+        "err": Any|None}``.
+        """
+
+        config: dict[str, Any] = {"searchTransactionHistory": search_transaction_history}
+        params: list[Any] = [signatures, config]
+        result = await self._call("getSignatureStatuses", params)
+        if not isinstance(result, dict):
+            return [None for _ in signatures]
+        values = result.get("value") or []
+        if not isinstance(values, list):
+            raise UpstreamError(
+                "Solana RPC getSignatureStatuses returned non-list value.",
+                details={"upstream": "solana_rpc", "value_type": type(values).__name__},
+            )
+        normalized: list[dict[str, Any] | None] = []
+        for entry in values:
+            if entry is None:
+                normalized.append(None)
+            elif isinstance(entry, dict):
+                normalized.append(entry)
+            else:
+                normalized.append(None)
+        return normalized
+
 
 # Module-level singleton. Importers can either use this or instantiate their
 # own (e.g. for tests with custom rpc_url).

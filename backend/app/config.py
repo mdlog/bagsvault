@@ -62,6 +62,43 @@ class Settings(BaseSettings):
     relayer_name: str = Field(default="BagsVault-Default", alias="RELAYER_NAME")
     relayer_max_compute_units: int = Field(default=400_000, alias="RELAYER_MAX_COMPUTE_UNITS")
 
+    # Phase 3: indexer + tx lifecycle
+    indexer_interval_seconds: int = Field(default=15, alias="INDEXER_INTERVAL_SECONDS")
+    indexer_enabled: bool = Field(default=True, alias="INDEXER_ENABLED")
+    bagsvault_idl_path: str = Field(
+        default="../idl/bagsvault.json", alias="BAGSVAULT_IDL_PATH"
+    )
+    solana_ws_url: str = Field(default="", alias="SOLANA_WS_URL")
+    tx_simulation_required: bool = Field(default=True, alias="TX_SIMULATION_REQUIRED")
+    tx_priority_fee_microlamports: int = Field(default=1000, alias="TX_PRIORITY_FEE_MICROLAMPORTS")
+    tx_retry_max_attempts: int = Field(default=3, alias="TX_RETRY_MAX_ATTEMPTS")
+    tx_retry_initial_backoff_ms: int = Field(default=500, alias="TX_RETRY_INITIAL_BACKOFF_MS")
+    tx_confirm_timeout_seconds: int = Field(default=60, alias="TX_CONFIRM_TIMEOUT_SECONDS")
+
+    # Phase 4: ZK proof generation toolchain
+    zk_circuit_dir: str = Field(
+        default="../circuits/bagsvault_withdraw", alias="ZK_CIRCUIT_DIR"
+    )
+    zk_nargo_bin: str = Field(default="nargo", alias="ZK_NARGO_BIN")
+    zk_bb_bin: str = Field(default="bb", alias="ZK_BB_BIN")
+    # When true, the proof service emits zero-byte stubs instead of
+    # invoking nargo/bb. The on-chain verifier rejects stubs by design —
+    # this flag is for local plumbing tests, never for production.
+    zk_proof_stub_mode: bool = Field(default=False, alias="ZK_PROOF_STUB_MODE")
+
+    @property
+    def derived_ws_url(self) -> str:
+        """Return ``solana_ws_url`` or derive from RPC URL by swapping scheme."""
+
+        if self.solana_ws_url:
+            return self.solana_ws_url
+        rpc = self.solana_rpc_url
+        if rpc.startswith("https://"):
+            return "wss://" + rpc[len("https://") :]
+        if rpc.startswith("http://"):
+            return "ws://" + rpc[len("http://") :]
+        return rpc
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]

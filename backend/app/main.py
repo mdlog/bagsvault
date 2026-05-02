@@ -14,6 +14,7 @@ from app.routers import (
     compliance,
     deposits,
     health,
+    proofs,
     relayers,
     root,
     status,
@@ -36,7 +37,29 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         settings.solana_cluster,
     )
     await ensure_indexes()
+
+    # Phase 3: spawn the merkle-root indexer worker. Wrapped in a broad
+    # try/except so a worker startup failure (e.g. a misconfigured RPC
+    # URL) never blocks the API from coming up.
+    worker = None
+    if settings.indexer_enabled and settings.bagsvault_program_id:
+        try:
+            from app.services.indexer_worker import get_indexer_worker
+
+            worker = get_indexer_worker()
+            await worker.start()
+        except Exception:  # noqa: BLE001 — degrade gracefully on startup
+            logger.exception("Failed to start IndexerWorker — continuing without it.")
+            worker = None
+
     yield
+
+    if worker is not None:
+        try:
+            await worker.stop()
+        except Exception:  # noqa: BLE001 — never block shutdown
+            logger.exception("IndexerWorker.stop raised — continuing shutdown.")
+
     await close_db()
     logger.info("Mongo client closed")
 
@@ -69,4 +92,5 @@ api_router.include_router(deposits.router)
 api_router.include_router(withdrawals.router)
 api_router.include_router(relayers.router)
 api_router.include_router(anonymity.router)
+api_router.include_router(proofs.router)
 app.include_router(api_router)

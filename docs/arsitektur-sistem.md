@@ -4,6 +4,24 @@
 
 ![BagsVault Architecture Diagram](./bagsvault_architecture.png)
 
+## 0. Status Implementasi Repo (Ringkasan)
+
+Tabel di bawah memetakan setiap pilar arsitektur ke lokasi sumbernya di repo ini.
+
+| Pilar | Lokasi | Status |
+|---|---|---|
+| BagsVault Anchor program | [`programs/bagsvault/`](../programs/bagsvault/) | ✅ Implementasi penuh (Merkle, nullifier, Groth16) |
+| Sirkuit Noir ZK | [`circuits/bagsvault_withdraw/`](../circuits/bagsvault_withdraw/) | ✅ Implementasi (perlu `nargo compile` + ceremony) |
+| IDL Anchor | [`idl/bagsvault.json`](../idl/bagsvault.json) | ✅ Dibundel — di-load oleh backend `AnchorDecoder` |
+| Backend ZK proof generator | [`backend/app/services/zk_proof_service.py`](../backend/app/services/zk_proof_service.py) | ✅ Orkestrasi nargo + bb (subprocess) |
+| Endpoint proof generator | [`backend/app/routers/proofs.py`](../backend/app/routers/proofs.py) | ✅ `POST /api/proofs/commitment` + `/withdraw` |
+| Bags API integration | [`backend/app/clients/bags_api.py`](../backend/app/clients/bags_api.py) | ✅ Trade, claim-fees, fee-share |
+| Range Risk integration | [`backend/app/clients/range_risk.py`](../backend/app/clients/range_risk.py) | ✅ Pre-deposit gating + cache TTL 30 hari |
+| Relayer network + tx executor | [`backend/app/services/relayer_service.py`](../backend/app/services/relayer_service.py), [`backend/app/clients/tx_executor.py`](../backend/app/clients/tx_executor.py) | ✅ Sign → simulate → broadcast → confirm |
+| Indexer + WS push | [`backend/app/services/merkle_indexer.py`](../backend/app/services/merkle_indexer.py), [`backend/app/services/indexer_worker.py`](../backend/app/services/indexer_worker.py) | ✅ Polling + opsional WebSocket subscribe |
+
+Catatan operasi: setelah `anchor deploy` menerbitkan program ID baru, ganti `BAGSVAULT_PROGRAM_ID` di `backend/.env`. Sebelum bukti penarikan dapat diverifikasi on-chain, jalankan trusted setup (lihat [`circuits/bagsvault_withdraw/README.md`](../circuits/bagsvault_withdraw/README.md)) dan substitusikan VK ke `programs/bagsvault/src/verifier.rs`.
+
 ## 1. Ringkasan Protokol
 
 Ekosistem kreator sering kali menghadapi masalah transparansi radikal di blockchain publik. Ketika dompet seorang kreator diketahui, seluruh riwayat transaksi, donasi, dan pendapatan *fee* mereka terekspos ke publik. BagsVault memecahkan masalah ini dengan mengimplementasikan arsitektur *mixer/tumbler* menggunakan sirkuit Noir ZK dan verifikasi Groth16 on-chain di Solana.
@@ -14,15 +32,15 @@ Protokol ini beroperasi melalui dua fase utama yang memutus hubungan on-chain an
 
 Sistem BagsVault terdiri dari empat pilar utama yang saling terintegrasi:
 
-### A. Lapisan Smart Contract (Solana On-Chain)
-Lapisan ini menangani logika inti dari privasi dan penyimpanan dana.
+### A. Lapisan Smart Contract (Solana On-Chain) — `programs/bagsvault/`
+Lapisan ini menangani logika inti dari privasi dan penyimpanan dana. Implementasi Anchor (BPF) tersedia di [`programs/bagsvault/src/lib.rs`](../programs/bagsvault/src/lib.rs).
 
-| Komponen | Fungsi | Integrasi Bags/Solana |
+| Komponen | Fungsi | Lokasi sumber |
 |----------|--------|----------------------|
-| **BagsVault Program** | Kontrak utama yang menerima deposit, memvalidasi bukti ZK, dan mengeksekusi penarikan. | Anchor Framework |
-| **Merkle Tree State** | Menyimpan riwayat *commitment* (hash dari deposit) untuk membangun *anonymity set*. | Menyimpan hingga 10 *roots* terbaru |
-| **Nullifier Set** | Melacak *nullifier* yang sudah digunakan untuk mencegah serangan *double-spending*. | Set data on-chain |
-| **Groth16 Verifier** | Memverifikasi validitas ZK Proof secara on-chain melalui *Cross-Program Invocation* (CPI). | Sunspot Verifier Program [2] |
+| **BagsVault Program** | Instruksi `initialize`, `deposit`, `withdraw`, `pause`, `unpause`, `rotate_authority`. | [`src/lib.rs`](../programs/bagsvault/src/lib.rs) + [`src/instructions/`](../programs/bagsvault/src/instructions/) |
+| **Merkle Tree State** | Incremental BN254-Poseidon tree depth 20, **rolling buffer 10 root terakhir** sesuai dokumen. PDA `[b"merkle_tree", token_mint]`. | [`src/state.rs::MerkleTreeState`](../programs/bagsvault/src/state.rs), [`src/merkle.rs`](../programs/bagsvault/src/merkle.rs) |
+| **Nullifier Set** | Satu PDA per nullifier (`[b"nullifier", &hash]`); double-spend dilindungi oleh constraint Anchor `init` yang gagal jika PDA sudah ada. | [`src/state.rs::Nullifier`](../programs/bagsvault/src/state.rs) |
+| **Groth16 Verifier** | Verifikasi in-program memakai crate [`groth16-solana`](https://github.com/Lightprotocol/groth16-solana) (BN254). VK didefinisikan di [`src/verifier.rs`](../programs/bagsvault/src/verifier.rs); ganti placeholder dengan output ceremony. Fallback CPI ke Sunspot tetap dimungkinkan via `BAGSVAULT_VERIFIER_ID`. | [`src/verifier.rs`](../programs/bagsvault/src/verifier.rs), [`src/instructions/withdraw.rs`](../programs/bagsvault/src/instructions/withdraw.rs) |
 
 ### B. Integrasi Bags API Layer
 Protokol ini secara mendalam memanfaatkan infrastruktur Bags API untuk manajemen token dan pendapatan.
@@ -34,8 +52,8 @@ Protokol ini secara mendalam memanfaatkan infrastruktur Bags API untuk manajemen
 ### C. Lapisan Privasi & Kepatuhan (Backend)
 Lapisan ini menyeimbangkan antara privasi absolut dan kepatuhan terhadap regulasi (AML/CTF).
 
-*   **ZK Proof Generator**: Server *backend* yang menghasilkan bukti Groth16 menggunakan sirkuit Noir. Bukti ini mengonfirmasi bahwa pengguna memiliki deposit yang valid tanpa mengungkapkan deposit yang mana.
-*   **Range Risk API Integration**: Melakukan pemeriksaan risiko dompet (sanctions, hacks, illicit activity) *sebelum* dana diizinkan masuk ke dalam *privacy pool*. Pendekatan ini terinspirasi dari arsitektur pemenang Solana Privacy Hack [6].
+*   **ZK Proof Generator**: [`backend/app/services/zk_proof_service.py`](../backend/app/services/zk_proof_service.py) mengorkestrasi `nargo execute` + `bb prove` di subprocess sandbox per request. `PoseidonHasher` membungkus backend Poseidon (mendukung `poseidon_hash` / `poseidon-py`, dengan fallback yang **disengaja salah** sehingga proof yang dihasilkan tanpa toolchain ditolak on-chain). Endpoint klien: `POST /api/proofs/commitment` (deposit-side), `POST /api/proofs/withdraw` (withdrawal-side) — lihat [`backend/app/routers/proofs.py`](../backend/app/routers/proofs.py).
+*   **Range Risk API Integration**: [`backend/app/clients/range_risk.py`](../backend/app/clients/range_risk.py) + [`backend/app/services/compliance_service.py`](../backend/app/services/compliance_service.py). Hasil scan disimpan di Mongo `risk_scans` dengan TTL 30 hari sehingga keputusan gating tidak menambah biaya inference per deposit. Pendekatan ini terinspirasi dari arsitektur pemenang Solana Privacy Hack [6].
 
 ### D. Relayer Network
 Jaringan relayer memungkinkan pengguna untuk melakukan penarikan dana tanpa harus memiliki SOL di dompet tujuan baru mereka (*gasless transactions*). Relayer akan membayarkan biaya gas Solana dan mengambil sebagian kecil dari dana penarikan sebagai kompensasi.
@@ -61,19 +79,22 @@ Fase ini terjadi ketika kreator ingin mencairkan dana ke dompet baru (fresh wall
 
 ## 4. Spesifikasi Teknis & Kriptografi
 
-Sirkuit Zero-Knowledge ditulis menggunakan bahasa **Noir**, yang dioptimalkan untuk menghasilkan bukti yang ringkas dan cepat.
+Sirkuit Zero-Knowledge ditulis menggunakan bahasa **Noir** dan dapat ditemukan di [`circuits/bagsvault_withdraw/src/main.nr`](../circuits/bagsvault_withdraw/src/main.nr). Build pipeline: `nargo compile` → `bb prove` → bytes 256-byte yang langsung dikonsumsi `programs/bagsvault/src/verifier.rs::verify_withdraw_proof`.
 
-**Public Inputs (Input Publik untuk Sirkuit):**
-*   `root`: Merkle tree root saat ini.
-*   `nullifier_hash`: Hash dari *nullifier* untuk mencegah pengeluaran ganda.
-*   `recipient`: Alamat penarikan tujuan.
-*   `amount`: Jumlah penarikan (opsional, dapat diatur tetap untuk privasi maksimal).
+**Public Inputs (urutan harus match `verifier.rs::NUM_PUBLIC_INPUTS = 5`):**
+1.  `root` — Merkle tree root saat ini (bytes32 BE).
+2.  `nullifier_hash` — `poseidon(nullifier, leaf_index)`.
+3.  `recipient` — Alamat penarikan tujuan (32 byte pubkey).
+4.  `amount` — Jumlah penarikan (binding ke denominasi pool tetap).
+5.  `relayer` — Pubkey relayer; mengikat proof ke pengirim sehingga tx tidak bisa di-frontrun di mempool.
 
-**Private Inputs (Input Rahasia dari Pengguna):**
-*   `nullifier`: Bagian dari *preimage* komitmen.
-*   `secret`: Bagian dari *preimage* komitmen.
-*   `merkle_proof`: Jalur pembuktian dari komitmen ke *root*.
-*   `is_even`: Indikator posisi dalam Merkle tree.
+**Private Inputs (witness):**
+*   `nullifier`, `secret`: Preimage komitmen (`commitment = poseidon(nullifier, secret, amount)`).
+*   `leaf_index`: Posisi commitment dalam tree (0..2²⁰).
+*   `merkle_path`: 20 sibling hash dari leaf ke root.
+*   `is_left`: 20 bit indikator posisi node pada setiap level.
+
+Integritas hash dijaga oleh kesepakatan tiga sisi: sirkuit Noir, kalkulasi off-chain di Python (`PoseidonHasher`), dan insertion on-chain (`merkle::insert` di [`programs/bagsvault/src/merkle.rs`](../programs/bagsvault/src/merkle.rs)) — semuanya menggunakan parameter Poseidon BN254 yang sama.
 
 ## 5. Keunggulan Kompetitif untuk Hackathon Bags
 

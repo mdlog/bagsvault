@@ -178,3 +178,116 @@ async def test_network_error_raises_upstream() -> None:
         with pytest.raises(UpstreamError):
             await client.get_slot()
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_simulate_transaction_returns_value_envelope() -> None:
+    client = SolanaRpcClient(rpc_url=RPC)
+    body = _ok(
+        {
+            "context": {"slot": 123},
+            "value": {
+                "err": None,
+                "logs": ["Program log: hello"],
+                "unitsConsumed": 4321,
+                "returnData": None,
+                "accounts": None,
+            },
+        }
+    )
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post(RPC).respond(200, json=body)
+        value = await client.simulate_transaction("base64payload")
+    assert value["err"] is None
+    assert value["logs"] == ["Program log: hello"]
+    assert value["unitsConsumed"] == 4321
+    sent = route.calls.last.request.read().decode()
+    assert "simulateTransaction" in sent
+    assert "base64" in sent
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_simulate_transaction_propagates_simulation_err() -> None:
+    """A simulation that returns ``err`` is *not* an RPC error — caller inspects it."""
+
+    client = SolanaRpcClient(rpc_url=RPC)
+    body = _ok(
+        {
+            "context": {"slot": 1},
+            "value": {
+                "err": {"InstructionError": [0, "Custom"]},
+                "logs": ["Program log: boom"],
+                "unitsConsumed": 12,
+            },
+        }
+    )
+    with respx.mock(assert_all_called=True) as router:
+        router.post(RPC).respond(200, json=body)
+        value = await client.simulate_transaction("base64payload")
+    # simulate() returns the value dict; the executor decides what to do.
+    assert value["err"] is not None
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_simulate_transaction_raises_on_malformed_value() -> None:
+    client = SolanaRpcClient(rpc_url=RPC)
+    body = _ok({"context": {"slot": 1}, "value": "not-a-dict"})
+    with respx.mock(assert_all_called=True) as router:
+        router.post(RPC).respond(200, json=body)
+        with pytest.raises(UpstreamError):
+            await client.simulate_transaction("base64payload")
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_get_signature_statuses_returns_list_with_nones() -> None:
+    client = SolanaRpcClient(rpc_url=RPC)
+    body = _ok(
+        {
+            "context": {"slot": 99},
+            "value": [
+                {
+                    "slot": 42,
+                    "confirmations": 2,
+                    "confirmationStatus": "confirmed",
+                    "err": None,
+                },
+                None,
+            ],
+        }
+    )
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post(RPC).respond(200, json=body)
+        statuses = await client.get_signature_statuses(["sigA", "sigB"])
+    assert len(statuses) == 2
+    assert statuses[0] is not None and statuses[0]["confirmationStatus"] == "confirmed"
+    assert statuses[1] is None
+    sent = route.calls.last.request.read().decode()
+    assert "getSignatureStatuses" in sent
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_get_signature_statuses_empty_value_returns_empty_list() -> None:
+    client = SolanaRpcClient(rpc_url=RPC)
+    body = _ok({"context": {"slot": 1}, "value": []})
+    with respx.mock(assert_all_called=True) as router:
+        router.post(RPC).respond(200, json=body)
+        statuses = await client.get_signature_statuses(["sigX"])
+    assert statuses == []
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_get_signature_statuses_respects_search_history_flag() -> None:
+    client = SolanaRpcClient(rpc_url=RPC)
+    body = _ok({"context": {"slot": 1}, "value": [None]})
+    with respx.mock(assert_all_called=True) as router:
+        route = router.post(RPC).respond(200, json=body)
+        await client.get_signature_statuses(["sigA"], search_transaction_history=True)
+    sent = route.calls.last.request.read().decode()
+    assert "searchTransactionHistory" in sent
+    assert "true" in sent
+    await client.aclose()

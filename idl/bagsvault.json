@@ -1,0 +1,132 @@
+{
+  "version": "0.1.0",
+  "name": "bagsvault",
+  "instructions": [
+    {
+      "name": "initialize",
+      "accounts": [
+        { "name": "authority", "isMut": true, "isSigner": true },
+        { "name": "tokenMint", "isMut": false, "isSigner": false },
+        { "name": "treeState", "isMut": true, "isSigner": false },
+        { "name": "systemProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": [{ "name": "denomination", "type": "u64" }]
+    },
+    {
+      "name": "deposit",
+      "accounts": [
+        { "name": "depositor", "isMut": true, "isSigner": true },
+        { "name": "vault", "isMut": true, "isSigner": false },
+        { "name": "treeState", "isMut": true, "isSigner": false },
+        { "name": "systemProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": [{ "name": "commitment", "type": { "array": ["u8", 32] } }]
+    },
+    {
+      "name": "withdraw",
+      "accounts": [
+        { "name": "relayer", "isMut": true, "isSigner": true },
+        { "name": "vault", "isMut": true, "isSigner": false },
+        { "name": "treeState", "isMut": true, "isSigner": false },
+        { "name": "nullifierPda", "isMut": true, "isSigner": false },
+        { "name": "recipientAccount", "isMut": true, "isSigner": false },
+        { "name": "systemProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": [
+        { "name": "proof", "type": "bytes" },
+        { "name": "root", "type": { "array": ["u8", 32] } },
+        { "name": "nullifierHash", "type": { "array": ["u8", 32] } },
+        { "name": "recipient", "type": "publicKey" },
+        { "name": "amount", "type": "u64" }
+      ]
+    },
+    {
+      "name": "pause",
+      "accounts": [
+        { "name": "authority", "isMut": false, "isSigner": true },
+        { "name": "treeState", "isMut": true, "isSigner": false }
+      ],
+      "args": []
+    },
+    {
+      "name": "unpause",
+      "accounts": [
+        { "name": "authority", "isMut": false, "isSigner": true },
+        { "name": "treeState", "isMut": true, "isSigner": false }
+      ],
+      "args": []
+    },
+    {
+      "name": "rotateAuthority",
+      "accounts": [
+        { "name": "authority", "isMut": false, "isSigner": true },
+        { "name": "treeState", "isMut": true, "isSigner": false }
+      ],
+      "args": [{ "name": "newAuthority", "type": "publicKey" }]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "MerkleTreeState",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "authority", "type": "publicKey" },
+          { "name": "tokenMint", "type": "publicKey" },
+          { "name": "denomination", "type": "u64" },
+          { "name": "commitmentCount", "type": "u64" },
+          { "name": "rootCursor", "type": "u8" },
+          { "name": "paused", "type": "bool" },
+          { "name": "filledSubtrees", "type": { "array": [{ "array": ["u8", 32] }, 20] } },
+          { "name": "roots", "type": { "array": [{ "array": ["u8", 32] }, 10] } },
+          { "name": "bump", "type": "u8" }
+        ]
+      }
+    },
+    {
+      "name": "Nullifier",
+      "type": {
+        "kind": "struct",
+        "fields": [{ "name": "bump", "type": "u8" }]
+      }
+    }
+  ],
+  "events": [
+    {
+      "name": "DepositEvent",
+      "fields": [
+        { "name": "commitment", "type": { "array": ["u8", 32] }, "index": false },
+        { "name": "leafIndex", "type": "u64", "index": false },
+        { "name": "timestamp", "type": "i64", "index": false }
+      ]
+    },
+    {
+      "name": "WithdrawEvent",
+      "fields": [
+        { "name": "nullifierHash", "type": { "array": ["u8", 32] }, "index": false },
+        { "name": "recipient", "type": "publicKey", "index": false },
+        { "name": "amount", "type": "u64", "index": false },
+        { "name": "timestamp", "type": "i64", "index": false }
+      ]
+    },
+    {
+      "name": "RootUpdatedEvent",
+      "fields": [
+        { "name": "newRoot", "type": { "array": ["u8", 32] }, "index": false },
+        { "name": "commitmentCount", "type": "u64", "index": false }
+      ]
+    }
+  ],
+  "errors": [
+    { "code": 6000, "name": "TreeFull", "msg": "Merkle tree is full — initialise a new pool." },
+    { "code": 6001, "name": "UnknownRoot", "msg": "Provided Merkle root is not in the recent root window." },
+    { "code": 6002, "name": "DoubleSpend", "msg": "Nullifier has already been spent." },
+    { "code": 6003, "name": "InvalidProof", "msg": "Groth16 proof failed verification." },
+    { "code": 6004, "name": "DenominationMismatch", "msg": "Deposit denomination does not match pool denomination." },
+    { "code": 6005, "name": "PoolPaused", "msg": "Pool is paused — admin must unpause before further use." },
+    { "code": 6006, "name": "Unauthorized", "msg": "Caller is not authorised for this admin action." }
+  ],
+  "metadata": {
+    "address": "BAGSVau1tProgram11111111111111111111111111111"
+  }
+}

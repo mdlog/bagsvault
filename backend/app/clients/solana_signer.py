@@ -46,12 +46,31 @@ class SolanaSignerClient:
     The instance is safe to share across the process — :class:`Keypair`
     from solders is immutable once constructed and signing is a pure
     function of its bytes.
+
+    A pool of keypairs may be supplied via ``keypair_paths``. When more
+    than one is configured, every public-API call (``pubkey``,
+    ``sign_transaction``, ``build_and_sign``) advances a round-robin
+    cursor and returns the next keypair in rotation. This lets a relayer
+    operator spread fee-paying load across several hot wallets without
+    centralizing on a single signer. The default single-keypair behaviour
+    (using ``settings.solana_relayer_keypair``) is unchanged when
+    ``keypair_paths`` is ``None`` or empty.
     """
 
-    def __init__(self, *, keypair_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        keypair_path: Path | None = None,
+        keypair_paths: list[Path] | None = None,
+    ) -> None:
         # Resolve lazily: tests can construct this client before .env exists.
         self._configured_path = keypair_path
+        self._configured_paths: list[Path] | None = (
+            list(keypair_paths) if keypair_paths else None
+        )
         self._keypair: Keypair | None = None
+        self._keypairs: list[Keypair] | None = None
+        self._rotation_index: int = 0
 
     # ------------------------------------------------------------------
     # Loading
@@ -61,11 +80,9 @@ class SolanaSignerClient:
             return self._configured_path
         return settings.keypair_path(settings.solana_relayer_keypair)
 
-    def _load(self) -> Keypair:
-        if self._keypair is not None:
-            return self._keypair
+    def _load_keypair_from_path(self, path: Path) -> Keypair:
+        """Read a Solana CLI JSON keypair file and parse it into a ``Keypair``."""
 
-        path = self._resolve_path()
         if not path.exists():
             raise ServiceUnavailableError(
                 "Relayer keypair not configured.",
@@ -95,34 +112,88 @@ class SolanaSignerClient:
                 details={"path": str(path), "error": str(exc)},
             ) from exc
 
+        return keypair
+
+    def _load(self) -> Keypair:
+        if self._keypair is not None:
+            return self._keypair
+
+        path = self._resolve_path()
+        keypair = self._load_keypair_from_path(path)
         self._keypair = keypair
         logger.info("relayer keypair loaded path=%s pubkey=%s", path, keypair.pubkey())
         return keypair
+
+    def _load_pool(self) -> list[Keypair]:
+        """Load every configured keypair in the pool exactly once."""
+
+        if self._keypairs is not None:
+            return self._keypairs
+
+        paths = self._configured_paths or []
+        loaded = [self._load_keypair_from_path(p) for p in paths]
+        self._keypairs = loaded
+        for path, kp in zip(paths, loaded):
+            logger.info(
+                "relayer keypair (pool) loaded path=%s pubkey=%s", path, kp.pubkey()
+            )
+        return loaded
+
+    def _next_keypair(self) -> Keypair:
+        """Return the active keypair, advancing the round-robin cursor."""
+
+        if self._configured_paths:
+            pool = self._load_pool()
+            if not pool:
+                # Defensive: empty list after filtering — fall through to single-keypair path.
+                return self._load()
+            kp = pool[self._rotation_index % len(pool)]
+            self._rotation_index = (self._rotation_index + 1) % len(pool)
+            return kp
+        return self._load()
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
     def pubkey(self) -> str:
-        """Return the relayer wallet's public key as a base58 string."""
+        """Return the next relayer wallet's public key as a base58 string.
 
-        return str(self._load().pubkey())
+        With a single keypair this is just the loaded keypair's pubkey.
+        With a configured pool, each call returns the next pubkey in
+        round-robin order.
+        """
+
+        return str(self._next_keypair().pubkey())
 
     def pubkey_obj(self) -> Pubkey:
-        """Return the relayer wallet's public key as a solders ``Pubkey``."""
+        """Return the next relayer wallet's public key as a solders ``Pubkey``."""
 
-        return self._load().pubkey()
+        return self._next_keypair().pubkey()
+
+    def pubkeys(self) -> list[str]:
+        """Return every loaded relayer pubkey (base58) in pool order.
+
+        For a single-keypair signer the returned list contains exactly
+        one entry. For a pool signer the list mirrors the order of the
+        ``keypair_paths`` constructor argument.
+        """
+
+        if self._configured_paths:
+            return [str(kp.pubkey()) for kp in self._load_pool()]
+        return [str(self._load().pubkey())]
 
     def sign_transaction(self, unsigned_tx: SignableTransaction) -> bytes:
-        """Sign ``unsigned_tx`` with the relayer keypair.
+        """Sign ``unsigned_tx`` with the next relayer keypair.
 
         Accepts either a :class:`VersionedTransaction` (already compiled
         with this signer as a required signer) or raw transaction bytes
         produced by the Solana RPC builder. Returns the serialized signed
         transaction as raw bytes — encode with base64 before sending over
-        JSON-RPC.
+        JSON-RPC. With a configured pool, each call advances the rotation
+        cursor.
         """
 
-        keypair = self._load()
+        keypair = self._next_keypair()
         if isinstance(unsigned_tx, (bytes, bytearray)):
             tx = VersionedTransaction.from_bytes(bytes(unsigned_tx))
         else:
@@ -143,12 +214,12 @@ class SolanaSignerClient:
         """Compile a v0 transaction from ``instructions`` and sign it.
 
         ``recent_blockhash`` is the base58 hash returned by
-        ``getLatestBlockhash``. ``payer`` defaults to the relayer pubkey.
-        Returns the serialized signed transaction (caller base64-encodes
-        for the JSON-RPC envelope).
+        ``getLatestBlockhash``. ``payer`` defaults to the next pooled
+        relayer pubkey. Returns the serialized signed transaction
+        (caller base64-encodes for the JSON-RPC envelope).
         """
 
-        keypair = self._load()
+        keypair = self._next_keypair()
         payer_pubkey = payer if payer is not None else keypair.pubkey()
         try:
             blockhash = Hash.from_string(recent_blockhash)

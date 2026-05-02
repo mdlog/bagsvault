@@ -1,0 +1,32 @@
+[package]
+name = "bagsvault"
+version = "0.1.0"
+description = "BagsVault privacy program for the Bags creator ecosystem"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "bagsvault"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+
+[dependencies]
+anchor-lang = "0.29.0"
+anchor-spl = "0.29.0"
+# Poseidon hash (BN254-friendly) — same parameters Tornado-style circuits use
+# so off-chain commitments / merkle nodes match the on-chain enforcement.
+light-poseidon = "0.2.0"
+# Light Protocol's Groth16 verifier in pure SBF-safe Rust. Used to verify the
+# withdrawal proof in-program (no external CPI required for hackathon scope).
+groth16-solana = "0.0.3"
+ark-bn254 = { version = "0.4.0", default-features = false }
+ark-ff = { version = "0.4.0", default-features = false }
+
+[dev-dependencies]
+solana-program-test = "1.18"
+solana-sdk = "1.18"

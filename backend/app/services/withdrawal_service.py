@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import logging
 from datetime import datetime, timezone
 from typing import Any, Protocol
@@ -33,8 +34,10 @@ from typing import Any, Protocol
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from solders.instruction import AccountMeta, Instruction
 from solders.pubkey import Pubkey
+from solders.system_program import ID as SYSTEM_PROGRAM_ID
 
 from app.clients.solana_signer import SolanaSignerClient
+from app.clients.tx_executor import TxExecutor
 from app.config import settings
 from app.exceptions import (
     BagsVaultError,
@@ -50,21 +53,29 @@ from app.services.relayer_service import RelayerService
 logger = logging.getLogger(__name__)
 
 
-# Layout assumption for the BagsVault `withdraw` instruction:
-#   * Anchor discriminator at instruction byte 0..8 (placeholder until
-#     IDL lands — we use ix_index=2 to mean "third Anchor handler").
-#   * Account order (matches the docstring contract in the task spec):
-#       0. program (BagsVault)              — read-only
-#       1. verifier (Sunspot Groth16)       — read-only
-#       2. recipient (target wallet)        — writable
-#       3. relayer (this signer)            — writable + signer
-#       4. nullifier PDA                    — writable
-#       5. root account (Merkle root cache) — read-only
-# The constants below mirror that contract; replace with IDL-derived
-# values once the program is deployed.
-WITHDRAW_IX_INDEX = 2
-WITHDRAW_DISCRIMINATOR = b"withdraw"  # placeholder — real ix uses 8-byte Anchor sighash
+# ----------------------------------------------------------------------
+# Anchor instruction layout (BagsVault.withdraw).
+# ----------------------------------------------------------------------
+# Account order MUST match
+# `programs/bagsvault/src/instructions/withdraw.rs::Withdraw`:
+#   0. relayer            (signer, writable)
+#   1. vault              (writable, PDA [b"vault", token_mint])
+#   2. tree_state         (writable, PDA [b"merkle_tree", token_mint])
+#   3. nullifier_pda      (writable, PDA [b"nullifier", nullifier_hash])
+#   4. recipient_account  (writable)
+#   5. system_program     (read-only)
+#
+# Instruction data layout uses Anchor's standard sighash + Borsh body:
+#   discriminator(8) | proof_len(4 LE) | proof_bytes
+#                    | root(32) | nullifier_hash(32)
+#                    | recipient(32) | amount(8 LE)
 SOL_TOKEN_SENTINEL = "SOL"
+# Anchor's per-instruction sighash. We compute it on import so we never
+# get out-of-sync with the program's `pub fn withdraw(...)` name.
+WITHDRAW_SIGHASH = hashlib.sha256(b"global:withdraw").digest()[:8]
+MERKLE_TREE_SEED = b"merkle_tree"
+VAULT_SEED = b"vault"
+NULLIFIER_SEED = b"nullifier"
 
 
 class SolanaRpc(Protocol):
@@ -83,6 +94,12 @@ class SolanaRpc(Protocol):
     async def send_transaction(self, signed_tx_b64: str, skip_preflight: bool = False) -> str: ...
 
     async def get_transaction(self, sig: str) -> dict[str, Any] | None: ...
+
+
+def _rpc_supports_executor(rpc: Any) -> bool:
+    """Return True iff ``rpc`` exposes the methods :class:`TxExecutor` needs."""
+
+    return hasattr(rpc, "simulate_transaction") and hasattr(rpc, "get_signature_statuses")
 
 
 def _coerce_blockhash(raw: Any) -> str:
@@ -155,10 +172,45 @@ def _decode_recipient(recipient: str) -> Pubkey:
         ) from exc
 
 
+def _resolve_token_mint(token: str) -> Pubkey:
+    """Resolve the pool's token-mint pubkey from the request's token tag.
+
+    The on-chain program treats the System Program ID as the sentinel
+    mint for native-SOL pools. Any other value must be a base58 mint.
+    """
+
+    if token == SOL_TOKEN_SENTINEL or not token:
+        return SYSTEM_PROGRAM_ID
+    if settings.vault_token_mint and token in {"VAULT", settings.vault_token_mint}:
+        return Pubkey.from_string(settings.vault_token_mint)
+    try:
+        return Pubkey.from_string(token)
+    except Exception as exc:  # noqa: BLE001
+        raise ValidationError(
+            "Unknown token tag for withdrawal — supply 'SOL', 'VAULT', or a base58 mint.",
+            details={"token": token, "error": str(exc)},
+        ) from exc
+
+
+def _derive_pdas(
+    program_id: Pubkey, token_mint: Pubkey, nullifier_bytes32: bytes
+) -> tuple[Pubkey, Pubkey, Pubkey]:
+    """Return ``(vault, tree_state, nullifier_pda)`` PDAs."""
+
+    vault, _ = Pubkey.find_program_address([VAULT_SEED, bytes(token_mint)], program_id)
+    tree_state, _ = Pubkey.find_program_address(
+        [MERKLE_TREE_SEED, bytes(token_mint)], program_id
+    )
+    nullifier_pda, _ = Pubkey.find_program_address(
+        [NULLIFIER_SEED, nullifier_bytes32], program_id
+    )
+    return vault, tree_state, nullifier_pda
+
+
 def _build_withdraw_ix(
     *,
     program_id: Pubkey,
-    verifier_id: Pubkey,
+    token_mint: Pubkey,
     recipient: Pubkey,
     relayer: Pubkey,
     proof_bytes: bytes,
@@ -168,43 +220,36 @@ def _build_withdraw_ix(
 ) -> Instruction:
     """Build the Anchor ``withdraw`` instruction.
 
-    See the module-level layout assumption block. The instruction data
-    layout is:
-
-    ``[discriminator(8) | ix_index(1) | amount(8 LE) | root(32) |
-    nullifier(32) | proof_len(4 LE) | proof_bytes]``
-
-    This matches what the BagsVault Anchor program is expected to
-    deserialize. Once the IDL is published, replace the discriminator
-    with the real Anchor sighash and pull the rest from anchorpy.
+    Matches the on-chain Anchor program at
+    ``programs/bagsvault/src/instructions/withdraw.rs``. PDAs are
+    derived deterministically so a client doesn't need to round-trip an
+    extra RPC call to learn them.
     """
 
-    # Pad / truncate root + nullifier to 32 bytes — most ZK schemes
-    # serialize them as exactly that, but operator-supplied hex may be
-    # short (leading zeros stripped) so we left-pad defensively.
     root32 = root_bytes.rjust(32, b"\x00")[-32:]
     nullifier32 = nullifier_bytes.rjust(32, b"\x00")[-32:]
 
+    vault_pda, tree_state_pda, nullifier_pda = _derive_pdas(
+        program_id, token_mint, nullifier32
+    )
+
     data = bytearray()
-    data += WITHDRAW_DISCRIMINATOR.ljust(8, b"\x00")[:8]
-    data += WITHDRAW_IX_INDEX.to_bytes(1, "little")
-    data += int(amount).to_bytes(8, "little")
-    data += root32
-    data += nullifier32
+    data += WITHDRAW_SIGHASH
+    # Borsh: Vec<u8> is len(u32 LE) || bytes.
     data += len(proof_bytes).to_bytes(4, "little")
     data += proof_bytes
+    data += root32
+    data += nullifier32
+    data += bytes(recipient)
+    data += int(amount).to_bytes(8, "little")
 
     accounts = [
-        AccountMeta(pubkey=program_id, is_signer=False, is_writable=False),
-        AccountMeta(pubkey=verifier_id, is_signer=False, is_writable=False),
-        AccountMeta(pubkey=recipient, is_signer=False, is_writable=True),
         AccountMeta(pubkey=relayer, is_signer=True, is_writable=True),
-        # Nullifier + root PDAs would normally be derived via
-        # find_program_address(...). Until we have the real seeds we
-        # advertise them as the program itself so the ix shape is
-        # stable and the program can re-derive at runtime.
-        AccountMeta(pubkey=program_id, is_signer=False, is_writable=True),
-        AccountMeta(pubkey=program_id, is_signer=False, is_writable=False),
+        AccountMeta(pubkey=vault_pda, is_signer=False, is_writable=True),
+        AccountMeta(pubkey=tree_state_pda, is_signer=False, is_writable=True),
+        AccountMeta(pubkey=nullifier_pda, is_signer=False, is_writable=True),
+        AccountMeta(pubkey=recipient, is_signer=False, is_writable=True),
+        AccountMeta(pubkey=SYSTEM_PROGRAM_ID, is_signer=False, is_writable=False),
     ]
     return Instruction(program_id=program_id, accounts=accounts, data=bytes(data))
 
@@ -218,11 +263,24 @@ class WithdrawalService:
         signer: SolanaSignerClient,
         relayers: RelayerService,
         db: AsyncIOMotorDatabase,
+        executor: TxExecutor | None = None,
     ) -> None:
         self._rpc = rpc
         self._signer = signer
         self._relayers = relayers
         self._db = db
+        # The executor encapsulates simulate -> broadcast -> confirm with
+        # retry. We build it lazily here only when the injected ``rpc``
+        # actually exposes the methods it requires
+        # (``simulate_transaction`` + ``get_signature_statuses``). Older
+        # tests that inject a minimal RPC stub fall through to the legacy
+        # inline broadcast path below.
+        if executor is not None:
+            self._executor: TxExecutor | None = executor
+        elif _rpc_supports_executor(rpc):
+            self._executor = TxExecutor(rpc=rpc, signer=signer, settings_obj=settings)
+        else:
+            self._executor = None
 
     # ------------------------------------------------------------------
     # Relay pipeline
@@ -248,21 +306,14 @@ class WithdrawalService:
                 "BAGSVAULT_PROGRAM_ID is not configured.",
                 details={"missing_env": "BAGSVAULT_PROGRAM_ID"},
             )
-        if not settings.bagsvault_verifier_id:
-            raise ServiceUnavailableError(
-                "BAGSVAULT_VERIFIER_ID is not configured.",
-                details={"missing_env": "BAGSVAULT_VERIFIER_ID"},
-            )
 
         try:
             program_id = Pubkey.from_string(settings.bagsvault_program_id)
-            verifier_id = Pubkey.from_string(settings.bagsvault_verifier_id)
         except Exception as exc:  # noqa: BLE001
             raise ServiceUnavailableError(
-                "BagsVault program/verifier id is not a valid base58 pubkey.",
+                "BagsVault program id is not a valid base58 pubkey.",
                 details={
                     "program_id": settings.bagsvault_program_id,
-                    "verifier_id": settings.bagsvault_verifier_id,
                     "error": str(exc),
                 },
             ) from exc
@@ -277,11 +328,12 @@ class WithdrawalService:
             public_inputs.nullifier_hash, label="public_inputs.nullifier_hash"
         )
         recipient_pubkey = _decode_recipient(public_inputs.recipient)
+        token_mint = _resolve_token_mint(public_inputs.token)
 
         relayer_pubkey = self._signer.pubkey_obj()
         ix = _build_withdraw_ix(
             program_id=program_id,
-            verifier_id=verifier_id,
+            token_mint=token_mint,
             recipient=recipient_pubkey,
             relayer=relayer_pubkey,
             proof_bytes=proof_bytes,
@@ -290,43 +342,63 @@ class WithdrawalService:
             amount=public_inputs.amount,
         )
 
-        # Step 5/6: blockhash → sign → broadcast.
-        try:
-            blockhash_payload = await self._rpc.get_recent_blockhash()
-        except BagsVaultError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            raise UpstreamError(
-                "Failed to fetch recent blockhash from Solana RPC.",
-                details={"error": str(exc)},
-            ) from exc
+        # Step 5/6/7: simulate → broadcast → confirm with retry.
+        # Production code paths inject an RPC client that supports the
+        # full surface (``simulate_transaction`` + ``get_signature_statuses``)
+        # so :class:`TxExecutor` handles the lifecycle. Legacy/minimal
+        # stubs fall back to the original inline broadcast path so older
+        # tests keep working without the executor's polling machinery.
+        if self._executor is not None:
+            try:
+                tx_result = await self._executor.send(
+                    instructions=[ix],
+                    payer=relayer_pubkey,
+                )
+            except BagsVaultError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise UpstreamError(
+                    "Solana RPC rejected the withdrawal transaction.",
+                    details={"error": str(exc)},
+                ) from exc
+            signature = tx_result.signature
+        else:
+            try:
+                blockhash_payload = await self._rpc.get_recent_blockhash()
+            except BagsVaultError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise UpstreamError(
+                    "Failed to fetch recent blockhash from Solana RPC.",
+                    details={"error": str(exc)},
+                ) from exc
 
-        recent_blockhash = _coerce_blockhash(blockhash_payload)
+            recent_blockhash = _coerce_blockhash(blockhash_payload)
 
-        try:
-            signed = self._signer.build_and_sign(
-                instructions=[ix],
-                recent_blockhash=recent_blockhash,
-                payer=relayer_pubkey,
-            )
-        except BagsVaultError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            raise ServiceUnavailableError(
-                "Failed to build and sign withdrawal transaction.",
-                details={"error": str(exc)},
-            ) from exc
+            try:
+                signed = self._signer.build_and_sign(
+                    instructions=[ix],
+                    recent_blockhash=recent_blockhash,
+                    payer=relayer_pubkey,
+                )
+            except BagsVaultError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise ServiceUnavailableError(
+                    "Failed to build and sign withdrawal transaction.",
+                    details={"error": str(exc)},
+                ) from exc
 
-        signed_b64 = base64.b64encode(signed).decode("ascii")
-        try:
-            signature = await self._rpc.send_transaction(signed_b64, skip_preflight=False)
-        except BagsVaultError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            raise UpstreamError(
-                "Solana RPC rejected the withdrawal transaction.",
-                details={"error": str(exc)},
-            ) from exc
+            signed_b64 = base64.b64encode(signed).decode("ascii")
+            try:
+                signature = await self._rpc.send_transaction(signed_b64, skip_preflight=False)
+            except BagsVaultError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise UpstreamError(
+                    "Solana RPC rejected the withdrawal transaction.",
+                    details={"error": str(exc)},
+                ) from exc
 
         # Step 7: persist (best-effort — the chain is the truth).
         record = Withdrawal(
