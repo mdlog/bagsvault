@@ -1,10 +1,14 @@
-// Deposit page — real backend-wired flow.
+// Deposit page — real backend-wired flow with browser wallet signing.
 //
-// The Phase 5 wallet adapter is not in this branch yet, so this page
-// uses a "depositor pubkey" text input as the proxy. The user signs the
-// generated unsigned tx out-of-band (via `solana program send-tx`,
-// Phantom's deeplink, etc.) and pastes the resulting signature back
-// here so we can record the commitment via POST /api/deposits.
+// Connected wallet (Phantom / Solflare / wallet-standard auto-discovery):
+//   1. Generate nullifier + secret + commitment via /api/proofs/commitment
+//   2. Build the unsigned deposit tx via /api/deposits/build
+//   3. Wallet signs + broadcasts via signAndSendTx (refreshes blockhash)
+//   4. Register the resulting signature via /api/deposits
+//   5. Show the private note — single source of truth for withdrawal
+//
+// No connected wallet → show "Connect wallet" CTA. The manual paste-tx
+// flow has been retired; signing happens entirely in the browser.
 
 import { useMemo, useState } from "react";
 import { useWallet } from "@/context/WalletContext";
@@ -17,7 +21,7 @@ import {
   AlertTriangle,
   Lock,
   ArrowRight,
-  KeyRound,
+  Wallet,
 } from "lucide-react";
 import {
   Select,
@@ -68,46 +72,51 @@ function toBaseUnits(token, amount) {
 }
 
 export default function Deposit() {
-  const { wallet } = useWallet();
+  const { wallet, connect, signAndSendTx } = useWallet();
   const [token, setToken] = useState("SOL");
   const [amount, setAmount] = useState(1);
   const [mode, setMode] = useState("standard");
 
-  const [step, setStep] = useState("idle"); // idle | commitment | building | awaiting-sig | registering | done
-  const [depositorPubkey, setDepositorPubkey] = useState("");
+  // Pipeline state. With the wallet adapter wired, "awaiting-sig" is no
+  // longer a user-blocking step — it's a transient state while the
+  // wallet popup is open.
+  const [step, setStep] = useState("idle"); // idle | commitment | building | signing | registering | done
   const [note, setNote] = useState("");
   const [noteOpen, setNoteOpen] = useState(false);
-  const [unsignedTx, setUnsignedTx] = useState(null); // { tx_base64, blockhash, ... }
-  const [pastedSignature, setPastedSignature] = useState("");
+  const [txSignature, setTxSignature] = useState("");
 
-  // Pre-fill depositor input from the (mock) wallet context the moment
-  // the user connects, so the upgrade path to a real wallet adapter is
-  // a one-line change in WalletContext.
-  const effectiveDepositor = depositorPubkey || wallet?.address || "";
-
-  const canSubmit = step === "idle" && effectiveDepositor.length >= 32;
+  const isConnected = Boolean(wallet?.address);
+  const canSubmit = step === "idle" && isConnected;
 
   const reset = () => {
     setStep("idle");
     setNote("");
-    setUnsignedTx(null);
-    setPastedSignature("");
+    setTxSignature("");
   };
 
   const runDeposit = async () => {
-    if (!effectiveDepositor || effectiveDepositor.length < 32) {
-      toast.error("Enter a valid Solana depositor pubkey first.");
+    if (!isConnected) {
+      connect();
+      toast.message("Connect a wallet to continue.");
       return;
     }
+
+    let commitment = null;
+    let nullifier = null;
+    let secret = null;
+    let baseUnits = null;
 
     try {
       // 1. Generate nullifier + secret + commitment.
       setStep("commitment");
-      const nullifier = randomFieldHex();
-      const secret = randomFieldHex();
-      const baseUnits = toBaseUnits(token, amount);
+      nullifier = randomFieldHex();
+      secret = randomFieldHex();
+      baseUnits = toBaseUnits(token, amount);
       const commitmentResp = await deriveCommitment(nullifier, secret, baseUnits);
-      const commitment = commitmentResp?.commitment || commitmentResp; // tolerant
+      commitment =
+        commitmentResp?.commitment_hex ||
+        commitmentResp?.commitment ||
+        commitmentResp;
       if (!commitment || typeof commitment !== "string") {
         throw new Error("Backend returned an empty commitment.");
       }
@@ -118,62 +127,95 @@ export default function Deposit() {
         commitment,
         amount: baseUnits,
         token,
-        depositorPubkey: effectiveDepositor,
+        depositorPubkey: wallet.address,
       });
-      setUnsignedTx(built);
+      const unsignedTx = built?.tx_base64 || built?.unsigned_tx;
+      if (!unsignedTx) {
+        throw new Error("Backend did not return an unsigned transaction.");
+      }
 
-      // 3. Hand the user the note + the unsigned tx and wait for the
-      //    signed signature to come back.
+      // 3. Show the note BEFORE signing. If the user closes the wallet
+      //    popup, they still need to know the secret in case the tx
+      //    actually landed (rare but possible with rebroadcasts).
       const newNote = buildNote({ token, amount, nullifier, secret });
       setNote(newNote);
       setNoteOpen(true);
-      setStep("awaiting-sig");
-      toast.success("Commitment generated", {
-        description: "Save the note + sign the unsigned tx.",
-      });
-    } catch (err) {
-      toast.error(err?.message || "Deposit failed.");
-      setStep("idle");
-    }
-  };
 
-  const submitSignature = async () => {
-    if (!pastedSignature || pastedSignature.length < 32) {
-      toast.error("Paste the broadcasted tx signature first.");
-      return;
-    }
-    if (!unsignedTx || !note) {
-      toast.error("Build a deposit transaction first.");
-      return;
-    }
-    try {
+      // 4. Sign + broadcast via the wallet adapter.
+      setStep("signing");
+      const signature = await signAndSendTx(unsignedTx);
+      setTxSignature(signature);
+
+      // 5. Register the commitment with the backend.
       setStep("registering");
-      const baseUnits = toBaseUnits(token, amount);
-      // We can't recover the commitment from the note (it only carries
-      // nullifier + secret). The build response echoes it back, so we
-      // pull it from `unsignedTx` here.
-      const commitment = unsignedTx.commitment;
-      if (!commitment) throw new Error("Internal error: missing commitment.");
       await registerDeposit({
         commitment,
         amount: baseUnits,
         token,
-        txSignature: pastedSignature.trim(),
+        txSignature: signature,
         creatorWallet: null,
       });
       setStep("done");
-      toast.success("Deposit registered", {
+      toast.success("Deposit confirmed", {
         description: `${amount} ${token} added to the privacy pool.`,
       });
     } catch (err) {
+      // User-rejected wallet popup is the most common path here.
+      const message = err?.message || "Deposit failed.";
+      const userRejected =
+        /rejected|cancel|denied/i.test(message) ||
+        err?.code === 4001 ||
+        err?.name === "WalletSendTransactionError";
+      if (userRejected) {
+        toast.error("Wallet signature was rejected.");
+      } else {
+        toast.error(message);
+      }
+      // If we already broadcast but the register call failed, surface
+      // the signature so the user can manually retry the registration.
+      setStep(txSignature ? "registering" : "idle");
+    }
+  };
+
+  const retryRegister = async () => {
+    if (!txSignature || !note) return;
+    try {
+      setStep("registering");
+      const baseUnits = toBaseUnits(token, amount);
+      // The commitment is encoded in the note as the second-to-last
+      // field; recover it from the same nullifier+secret+amount inputs.
+      const parts = note.split("-");
+      const recoveredNullifier = parts[parts.length - 2];
+      const recoveredSecret = parts[parts.length - 1];
+      const commitmentResp = await deriveCommitment(
+        recoveredNullifier,
+        recoveredSecret,
+        baseUnits,
+      );
+      const commitment =
+        commitmentResp?.commitment_hex ||
+        commitmentResp?.commitment ||
+        commitmentResp;
+      await registerDeposit({
+        commitment,
+        amount: baseUnits,
+        token,
+        txSignature,
+        creatorWallet: null,
+      });
+      setStep("done");
+      toast.success("Deposit registered.");
+    } catch (err) {
       toast.error(err?.message || "Registering deposit failed.");
-      setStep("awaiting-sig");
     }
   };
 
   const stepIndex = useMemo(
-    () => ["idle", "commitment", "building", "awaiting-sig", "registering", "done"].indexOf(step),
-    [step]
+    () =>
+      ["idle", "commitment", "building", "signing", "registering", "done"].indexOf(
+        step,
+      ),
+    [step],
   );
 
   return (
@@ -194,17 +236,35 @@ export default function Deposit() {
         </div>
       </div>
 
-      {/* Wallet warning — shown until Phase 5 wallet adapter ships. */}
-      <div className="mt-6 border border-amber-500/30 bg-amber-500/[0.04] rounded-md p-3.5 flex gap-3 items-start">
-        <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
-        <div className="text-xs text-amber-200 leading-relaxed">
-          <span className="font-medium">No wallet adapter yet.</span> Paste your
-          depositor pubkey below — the page will return an unsigned base64
-          transaction that you sign + broadcast manually (e.g. via{" "}
-          <code className="font-mono text-[11px] text-amber-100">solana program send-tx</code>),
-          then return here to register the resulting signature.
+      {/* Wallet status banner. */}
+      {isConnected ? (
+        <div className="mt-6 border border-[#14F195]/25 bg-[#14F195]/[0.04] rounded-md p-3.5 flex gap-3 items-center">
+          <Wallet className="w-4 h-4 text-[#14F195] flex-shrink-0" />
+          <div className="text-xs text-zinc-300 leading-relaxed flex-1">
+            Signed in as{" "}
+            <code className="font-mono text-[11px] text-white">
+              {wallet.address.slice(0, 6)}…{wallet.address.slice(-6)}
+            </code>{" "}
+            via {wallet.provider}. Deposits sign + broadcast in your wallet —
+            BagsVault never holds your key.
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="mt-6 border border-amber-500/30 bg-amber-500/[0.04] rounded-md p-3.5 flex gap-3 items-start">
+          <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+          <div className="text-xs text-amber-200 leading-relaxed">
+            <span className="font-medium">Wallet not connected.</span> Click{" "}
+            <button
+              onClick={() => connect()}
+              className="underline text-amber-100 hover:text-white"
+            >
+              Connect wallet
+            </button>{" "}
+            in the top-right (or hit the deposit button below) to sign
+            transactions in-browser via Phantom / Solflare / wallet-standard.
+          </div>
+        </div>
+      )}
 
       <div className="grid lg:grid-cols-5 gap-5 mt-6">
         {/* LEFT: Form */}
@@ -241,16 +301,30 @@ export default function Deposit() {
 
           {/* Card */}
           <div className="border border-white/5 bg-[#0a0b0d] p-6 lg:p-7 space-y-6 rounded-md">
-            {/* Depositor pubkey */}
+            {/* Connected depositor — read-only display when wallet is on. */}
             <div>
-              <label className="text-xs text-zinc-400 mb-2 block">Depositor pubkey</label>
-              <input
-                data-testid="depositor-input"
-                value={depositorPubkey}
-                onChange={(e) => setDepositorPubkey(e.target.value)}
-                placeholder={wallet?.address || "Solana base58 pubkey of the signer wallet"}
-                className="w-full h-12 bg-[#07080a] border border-white/10 focus:border-[#14F195]/50 focus:outline-none rounded-md px-3.5 font-mono text-xs text-white placeholder:text-zinc-700"
-              />
+              <label className="text-xs text-zinc-400 mb-2 block">Depositor</label>
+              <div
+                data-testid="depositor-display"
+                className={`w-full h-12 bg-[#07080a] border rounded-md px-3.5 flex items-center justify-between ${
+                  isConnected ? "border-white/10" : "border-amber-500/30"
+                }`}
+              >
+                {isConnected ? (
+                  <>
+                    <span className="font-mono text-xs text-white">
+                      {wallet.address.slice(0, 8)}…{wallet.address.slice(-8)}
+                    </span>
+                    <span className="text-[11px] text-zinc-500">
+                      {wallet.provider}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-xs text-amber-200">
+                    Connect a wallet to continue.
+                  </span>
+                )}
+              </div>
             </div>
 
             {/* Token */}
@@ -325,11 +399,19 @@ export default function Deposit() {
               <button
                 data-testid="deposit-submit-btn"
                 onClick={runDeposit}
-                disabled={!canSubmit}
+                disabled={step !== "idle"}
                 className="w-full h-11 bg-white text-black rounded-md font-medium text-sm hover:bg-zinc-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 {step === "idle" ? (
-                  <>Generate commitment + tx <ArrowRight className="w-4 h-4" /></>
+                  isConnected ? (
+                    <>Deposit {amount} {token} <ArrowRight className="w-4 h-4" /></>
+                  ) : (
+                    <><Wallet className="w-4 h-4" /> Connect wallet to deposit</>
+                  )
+                ) : step === "signing" ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Awaiting signature…</>
+                ) : step === "registering" ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Registering…</>
                 ) : (
                   <><Loader2 className="w-4 h-4 animate-spin" /> Working…</>
                 )}
@@ -337,63 +419,63 @@ export default function Deposit() {
             )}
           </div>
 
-          {/* Awaiting signature panel */}
-          {(step === "awaiting-sig" || step === "registering") && unsignedTx && (
-            <div className="border border-[#14F195]/30 bg-[#14F195]/[0.04] p-5 rounded-md space-y-4">
+          {/* Tx confirmation / retry panel — visible once we have a sig. */}
+          {txSignature && (
+            <div className="border border-[#14F195]/30 bg-[#14F195]/[0.04] p-5 rounded-md space-y-3">
               <div className="flex items-center gap-2">
-                <KeyRound className="w-4 h-4 text-[#14F195]" />
-                <p className="text-sm font-medium text-white">Sign &amp; broadcast manually</p>
+                <CheckCircle2 className="w-4 h-4 text-[#14F195]" />
+                <p className="text-sm font-medium text-white">
+                  {step === "done"
+                    ? "Deposit confirmed on chain"
+                    : "Transaction broadcasted"}
+                </p>
               </div>
               <div>
                 <p className="text-[10px] uppercase tracking-wider text-[#14F195] mb-1.5">
-                  Unsigned transaction (base64)
+                  Tx signature
                 </p>
                 <code
-                  data-testid="unsigned-tx-base64"
-                  className="block font-mono text-[10px] text-white break-all leading-relaxed border border-white/10 bg-[#07080a] rounded-md p-3 max-h-32 overflow-auto"
+                  data-testid="tx-signature"
+                  className="block font-mono text-[10px] text-white break-all leading-relaxed border border-white/10 bg-[#07080a] rounded-md p-3"
                 >
-                  {unsignedTx.tx_base64}
+                  {txSignature}
                 </code>
-                <button
-                  data-testid="copy-tx-btn"
-                  onClick={() => {
-                    navigator.clipboard.writeText(unsignedTx.tx_base64);
-                    toast.success("Unsigned tx copied");
-                  }}
-                  className="mt-2 text-xs text-[#14F195] hover:text-white inline-flex items-center gap-1"
-                >
-                  <Copy className="w-3 h-3" /> Copy
-                </button>
-                <p className="text-[11px] text-zinc-400 mt-2 leading-relaxed">
-                  Sign with your wallet (Phantom: import as transaction, or run{" "}
-                  <code className="font-mono text-[10px] text-zinc-200">
-                    solana program send-tx
-                  </code>
-                  ), then paste the resulting tx signature below.
+                <div className="flex gap-3 mt-2">
+                  <button
+                    data-testid="copy-tx-btn"
+                    onClick={() => {
+                      navigator.clipboard.writeText(txSignature);
+                      toast.success("Signature copied");
+                    }}
+                    className="text-xs text-[#14F195] hover:text-white inline-flex items-center gap-1"
+                  >
+                    <Copy className="w-3 h-3" /> Copy
+                  </button>
+                  <a
+                    href={`https://explorer.solana.com/tx/${txSignature}?cluster=devnet`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-[#14F195] hover:text-white inline-flex items-center gap-1"
+                  >
+                    Open on Solana Explorer ↗
+                  </a>
+                </div>
+              </div>
+              {step === "registering" && (
+                <p className="text-[11px] text-zinc-400 flex items-center gap-1.5">
+                  <Loader2 className="w-3 h-3 animate-spin" /> Registering with
+                  the indexer…
                 </p>
-              </div>
-              <div>
-                <label className="text-xs text-zinc-400 mb-2 block">Tx signature</label>
-                <input
-                  data-testid="tx-signature-input"
-                  value={pastedSignature}
-                  onChange={(e) => setPastedSignature(e.target.value)}
-                  placeholder="5...base58 signature..."
-                  className="w-full h-11 bg-[#07080a] border border-white/10 focus:border-[#14F195]/50 focus:outline-none rounded-md px-3.5 font-mono text-xs text-white placeholder:text-zinc-700"
-                />
+              )}
+              {step !== "done" && step !== "registering" && (
                 <button
-                  data-testid="submit-signature-btn"
-                  onClick={submitSignature}
-                  disabled={step === "registering"}
-                  className="mt-3 w-full h-11 bg-[#14F195] text-black rounded-md font-medium text-sm hover:bg-[#14F195]/90 disabled:opacity-50 flex items-center justify-center gap-2"
+                  data-testid="retry-register-btn"
+                  onClick={retryRegister}
+                  className="w-full h-11 bg-[#14F195] text-black rounded-md font-medium text-sm hover:bg-[#14F195]/90 flex items-center justify-center gap-2"
                 >
-                  {step === "registering" ? (
-                    <><Loader2 className="w-4 h-4 animate-spin" /> Registering…</>
-                  ) : (
-                    <>Register commitment <ArrowRight className="w-4 h-4" /></>
-                  )}
+                  Retry register commitment <ArrowRight className="w-4 h-4" />
                 </button>
-              </div>
+              )}
             </div>
           )}
         </div>
@@ -405,7 +487,7 @@ export default function Deposit() {
             {[
               { id: 1, title: "Generate commitment", mono: "POST /api/proofs/commitment", active: stepIndex >= 1, done: stepIndex >= 2 },
               { id: 2, title: "Build unsigned tx", mono: "POST /api/deposits/build", active: stepIndex >= 2, done: stepIndex >= 3 },
-              { id: 3, title: "User signs + broadcasts", mono: "wallet · solana RPC", active: stepIndex >= 3, done: stepIndex >= 4 },
+              { id: 3, title: "Wallet signs + broadcasts", mono: `${wallet?.provider || "wallet"} · solana RPC`, active: stepIndex >= 3, done: stepIndex >= 4 },
               { id: 4, title: "Register commitment", mono: "POST /api/deposits", active: stepIndex >= 4, done: stepIndex >= 5 },
             ].map((s, i, arr) => (
               <div key={s.id} className="flex gap-3.5 relative">
@@ -439,11 +521,12 @@ export default function Deposit() {
           </div>
 
           <div className="border border-white/5 bg-[#0a0b0d] p-5 rounded-md text-xs text-zinc-400 leading-relaxed">
-            <p className="text-zinc-300 font-medium mb-2 text-sm">Why a manual sign step?</p>
+            <p className="text-zinc-300 font-medium mb-2 text-sm">In-browser signing</p>
             <p>
-              Phase 5 wires up the Solana wallet adapter so the entire flow
-              happens in-browser. Until then we keep the protocol honest by
-              never asking the backend to hold your signing key.
+              Your wallet (Phantom / Solflare / wallet-standard) signs the
+              deposit transaction locally; the backend only sees the public
+              commitment + the broadcasted signature. The signing key never
+              leaves your device.
             </p>
           </div>
         </div>

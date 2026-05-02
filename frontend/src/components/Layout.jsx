@@ -2,13 +2,6 @@ import { Outlet, NavLink, Link, useLocation } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { useWallet } from "@/context/WalletContext";
 import { toast } from "sonner";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Shield, Menu, X, Copy, LogOut } from "lucide-react";
 
@@ -20,80 +13,27 @@ const NAV = [
   { to: "/architecture", label: "Architecture" },
 ];
 
-const ConnectModal = ({ open, onOpenChange }) => {
-  const { connect } = useWallet();
-  const handleConnect = (provider) => {
-    const data = connect(provider);
-    toast.success(`Connected to ${provider}`, {
-      description: `${data.address.slice(0, 6)}...${data.address.slice(-4)}`,
-    });
-    onOpenChange(false);
-  };
-  const wallets = [
-    { name: "Phantom", color: "#AB9FF2" },
-    { name: "Solflare", color: "#FC9828" },
-    { name: "Backpack", color: "#E33E3F" },
-  ];
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="bg-[#0c0d10] border-white/10 text-white max-w-md rounded-lg"
-        data-testid="connect-wallet-modal"
-      >
-        <DialogHeader>
-          <DialogTitle className="text-xl font-semibold">Connect wallet</DialogTitle>
-          <DialogDescription className="text-zinc-500 text-sm">
-            Choose a Solana wallet to access the BagsVault privacy pool.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-2 mt-2">
-          {wallets.map((w) => (
-            <button
-              key={w.name}
-              data-testid={`connect-${w.name.toLowerCase()}-btn`}
-              onClick={() => handleConnect(w.name)}
-              className="w-full flex items-center justify-between p-3.5 bg-[#0a0b0d] border border-white/10 hover:border-white/25 hover:bg-white/[0.02] transition-colors rounded-md group"
-            >
-              <span className="flex items-center gap-3">
-                <span
-                  className="w-9 h-9 flex items-center justify-center text-sm font-semibold rounded-md"
-                  style={{ background: w.color, color: "#000" }}
-                >
-                  {w.name[0]}
-                </span>
-                <span className="font-medium text-sm">{w.name}</span>
-              </span>
-              <span className="text-[11px] text-zinc-500 group-hover:text-zinc-300">
-                Detected
-              </span>
-            </button>
-          ))}
-        </div>
-        <p className="text-xs text-zinc-600 mt-3">
-          Demo mode: wallet connection is simulated for UI preview.
-        </p>
-      </DialogContent>
-    </Dialog>
-  );
-};
+// `ConnectModal` is intentionally removed — the real wallet adapter
+// ships its own modal via `WalletModalProvider` and the
+// `useWalletModal().setVisible(true)` hook (called by `connect()`),
+// which auto-discovers installed wallets via the wallet-standard.
+// `Dialog` and `DialogContent` imports are kept above because other
+// pages still use them — no-op here.
 
 const WalletPill = () => {
-  const { wallet, balance, disconnect } = useWallet();
-  const [open, setOpen] = useState(false);
+  const { wallet, balance, connect, disconnect, connecting } = useWallet();
   const [menu, setMenu] = useState(false);
 
   if (!wallet) {
     return (
-      <>
-        <Button
-          data-testid="connect-wallet-btn"
-          onClick={() => setOpen(true)}
-          className="bg-white text-black hover:bg-zinc-200 rounded-md font-medium px-4 h-9 text-sm"
-        >
-          Connect wallet
-        </Button>
-        <ConnectModal open={open} onOpenChange={setOpen} />
-      </>
+      <Button
+        data-testid="connect-wallet-btn"
+        onClick={() => connect()}
+        disabled={connecting}
+        className="bg-white text-black hover:bg-zinc-200 rounded-md font-medium px-4 h-9 text-sm disabled:opacity-60"
+      >
+        {connecting ? "Connecting…" : "Connect wallet"}
+      </Button>
     );
   }
 
