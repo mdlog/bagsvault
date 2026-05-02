@@ -20,10 +20,14 @@ import {
   WalletModalProvider,
   useWalletModal,
 } from "@solana/wallet-adapter-react-ui";
-import {
-  PhantomWalletAdapter,
-  SolflareWalletAdapter,
-} from "@solana/wallet-adapter-wallets";
+// Import each adapter from its own package — `@solana/wallet-adapter-wallets`
+// is a meta-package whose barrel re-exports every known adapter (Torus,
+// Coin98, Glow, etc.). Even with named imports, webpack pulls those siblings
+// in because side-effect tree-shaking on the meta-package is unreliable, and
+// the Torus adapter drags in `@toruslabs/eccrypto` which needs a Node-style
+// `crypto` module the browser doesn't ship.
+import { PhantomWalletAdapter } from "@solana/wallet-adapter-phantom";
+import { SolflareWalletAdapter } from "@solana/wallet-adapter-solflare";
 import { clusterApiUrl } from "@solana/web3.js";
 
 import "@solana/wallet-adapter-react-ui/styles.css";

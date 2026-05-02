@@ -47,16 +47,18 @@ const webpackConfig = {
         ],
       };
 
-      // Solana web3.js needs Buffer + process polyfills in the browser.
-      // CRA 5 dropped them by default; wire them back via fallbacks +
-      // ProvidePlugin so wallet adapters and @solana/web3.js work.
+      // Solana web3.js + transitive wallet-adapter deps need Node-style
+      // `Buffer`, `process`, `crypto`, and `stream` in the browser.
+      // CRA 5 dropped these by default; wire them back via fallbacks +
+      // ProvidePlugin. `crypto-browserify` and `stream-browserify` are
+      // direct deps so a fresh `yarn install` always picks them up.
       webpackConfig.resolve = webpackConfig.resolve || {};
       webpackConfig.resolve.fallback = {
         ...(webpackConfig.resolve.fallback || {}),
         buffer: require.resolve("buffer/"),
         process: require.resolve("process/browser.js"),
-        crypto: false,
-        stream: false,
+        crypto: require.resolve("crypto-browserify"),
+        stream: require.resolve("stream-browserify"),
         zlib: false,
       };
       webpackConfig.plugins = (webpackConfig.plugins || []).concat([
