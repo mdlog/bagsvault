@@ -80,3 +80,6 @@ memory/test_credentials.md
 
 # Mobile development
 android-sdk/
+
+# Internal docs (not for public repo)
+docs/PRD.md
