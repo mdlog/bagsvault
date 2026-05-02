@@ -83,3 +83,10 @@ android-sdk/
 
 # Internal docs (not for public repo)
 docs/PRD.md
+# Cargo build artifacts (per-crate target dirs are also ignored).
+/target/
+/programs/*/target/
+Cargo.lock
+
+# Local agent worktrees
+.claude/worktrees/

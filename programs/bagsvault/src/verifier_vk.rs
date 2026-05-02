@@ -29,7 +29,11 @@
 /// Number of public inputs the circuit exposes. Mirrored in
 /// `verifier.rs` so the Rust unit test there can detect a circuit
 /// edit that drifts away from the regenerated VK.
-pub const NUM_PUBLIC_INPUTS: usize = 5;
+///
+/// Layout (matches `circuits/bagsvault_withdraw/src/main.nr`):
+///   0. root, 1. nullifier_hash, 2. recipient, 3. amount,
+///   4. relayer, 5. fee_bps.
+pub const NUM_PUBLIC_INPUTS: usize = 6;
 
 /// `vk_alpha_g1` (G1, 64 bytes BE-compressed).
 pub const VK_ALPHA_G1: [u8; 64] = [0u8; 64];

@@ -28,6 +28,11 @@ pub struct MerkleTreeState {
     /// Number of commitments inserted so far. Doubles as the next leaf
     /// index, so it must be < 2^MERKLE_TREE_DEPTH.
     pub commitment_count: u64,
+    /// Relayer cut taken from every withdrawal, expressed in basis points
+    /// (1 bps = 0.01%). Bound into the proof's public inputs so a
+    /// front-runner cannot redirect funds with a different cut. Capped at
+    /// 1000 (10%) by `initialize`.
+    pub relayer_fee_bps: u16,
     /// Index of the next slot to overwrite in `roots` (ring buffer cursor).
     pub root_cursor: u8,
     /// True when admin has paused the pool.
@@ -50,6 +55,7 @@ impl MerkleTreeState {
         + 32                        // token_mint
         + 8                         // denomination
         + 8                         // commitment_count
+        + 2                         // relayer_fee_bps
         + 1                         // root_cursor
         + 1                         // paused
         + (32 * MERKLE_TREE_DEPTH)  // filled_subtrees

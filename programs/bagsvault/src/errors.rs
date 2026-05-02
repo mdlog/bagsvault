@@ -16,4 +16,6 @@ pub enum BagsVaultError {
     PoolPaused,
     #[msg("Caller is not authorised for this admin action.")]
     Unauthorized,
+    #[msg("Relayer fee bps exceeds the 10% protocol cap.")]
+    FeeBpsTooHigh,
 }

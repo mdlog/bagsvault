@@ -454,6 +454,17 @@ class WithdrawalService:
         # Pick a relayer (this node is registered via seed_relayers.py).
         relayer: Relayer = await self._relayers.pick_best(token=public_inputs.token)
 
+        # Resolve the fee_bps that this relayer advertises. The on-chain
+        # program reads ``tree_state.relayer_fee_bps`` directly to split
+        # the lamports, so this value MUST match the pool's advertised
+        # cut and the value the prover used when generating the proof's
+        # public input at index 5. Falls back to the operator-configured
+        # default when the registry doesn't carry one (legacy rows).
+        active_fee_bps = (
+            relayer.fee_bps if getattr(relayer, "fee_bps", None) is not None
+            else settings.relayer_fee_bps
+        )
+
         # Step 4: build the on-chain withdraw instruction.
         proof_bytes = _hex_to_bytes(payload.proof, label="proof")
         root_bytes = _hex_to_bytes(public_inputs.root, label="public_inputs.root")
@@ -565,14 +576,15 @@ class WithdrawalService:
             logger.info("relayer last_seen update skipped: %s", exc)
 
         logger.info(
-            "withdrawal.relay sig=%s relayer=%s recipient=%s amount=%d token=%s",
+            "withdrawal.relay sig=%s relayer=%s recipient=%s amount=%d token=%s fee_bps=%d",
             signature,
             relayer.relayer_id,
             public_inputs.recipient,
             public_inputs.amount,
             public_inputs.token,
+            active_fee_bps,
         )
-        return {"signature": signature, "status": "submitted"}
+        return {"signature": signature, "status": "submitted", "fee_bps": active_fee_bps}
 
     # ------------------------------------------------------------------
     # Anonymized listing

@@ -47,8 +47,12 @@ declare_id!("BAGSVau1tProgram11111111111111111111111111111");
 pub mod bagsvault {
     use super::*;
 
-    pub fn initialize(ctx: Context<Initialize>, denomination: u64) -> Result<()> {
-        instructions::initialize::handler(ctx, denomination)
+    pub fn initialize(
+        ctx: Context<Initialize>,
+        denomination: u64,
+        relayer_fee_bps: u16,
+    ) -> Result<()> {
+        instructions::initialize::handler(ctx, denomination, relayer_fee_bps)
     }
 
     // ----- Deposits -----------------------------------------------------

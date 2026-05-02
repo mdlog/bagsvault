@@ -8,10 +8,10 @@
 //!
 //! The Groth16 verification + nullifier-PDA-init prelude lives in
 //! `core::verify_and_record` so both variants share the same cryptographic
-//! contract. This is also the seam Priority 3 (relayer fee) extends —
-//! changes to the prelude (e.g. `fee_bps` plumbing) belong inside the
-//! helper, while the lamport / SPL transfer paths stay in the variant
-//! handlers.
+//! contract — including the `fee_bps` binding (public input #5) that
+//! prevents a malicious relayer from front-running with a different cut.
+//! The lamport / SPL transfer paths in each handler then split the
+//! payout between recipient and relayer.
 //!
 //! Sunspot CPI fallback: each variant exposes an OPTIONAL trailing
 //! `verifier_program` account. When supplied, `core::verify_and_record`
@@ -28,19 +28,29 @@ use crate::verifier::{
     pubkey_to_field, u64_to_field, verify_withdraw_proof, NUM_PUBLIC_INPUTS,
 };
 
+/// Compute the relayer cut and recipient amount for a withdrawal of
+/// `amount` lamports/units against a pool advertising `fee_bps` bps.
+/// `u128` multiplication keeps the math correct over the full `u64`
+/// range without overflow.
+pub(crate) fn split_payout(amount: u64, fee_bps: u16) -> Result<(u64, u64)> {
+    let relayer_cut: u64 = ((amount as u128)
+        .checked_mul(fee_bps as u128)
+        .ok_or_else(|| error!(BagsVaultError::InvalidProof))?
+        / 10_000u128) as u64;
+    let recipient_amount = amount
+        .checked_sub(relayer_cut)
+        .ok_or_else(|| error!(BagsVaultError::InvalidProof))?;
+    Ok((recipient_amount, relayer_cut))
+}
+
 // ---------------------------------------------------------------------------
 // Shared verification + nullifier-record prelude.
 // ---------------------------------------------------------------------------
-//
-// Priority 3 (relayer fee) will extend this prelude — typically by
-// accepting a `fee_bps` argument and threading it through the public
-// inputs. Keeping the verification logic centralised means the SOL and
-// SPL variants stay in lockstep.
 pub(crate) mod core {
     use super::*;
 
-    /// Run the cheap pre-checks, build public inputs, verify the Groth16
-    /// proof, and seal the nullifier PDA.
+    /// Run the cheap pre-checks, build the 6-element public-input array,
+    /// verify the Groth16 proof, and seal the nullifier PDA.
     ///
     /// Caller is responsible for the actual fund movement (lamports vs
     /// SPL transfer). On success the function emits the `WithdrawEvent`.
@@ -48,6 +58,11 @@ pub(crate) mod core {
     /// `sunspot_verifier`: when `Some(_)`, verification is delegated to
     /// the Sunspot CPI program at that address; when `None`, the inline
     /// `groth16-solana` verifier runs.
+    ///
+    /// `fee_bps` is read from the pool state by the caller and bound
+    /// into public input #5 — the off-chain prover MUST commit to the
+    /// same value the pool advertises, otherwise a malicious relayer
+    /// could replay the proof against a pool with a different cut.
     pub fn verify_and_record(
         tree_state: &MerkleTreeState,
         nullifier_pda: &mut Account<Nullifier>,
@@ -77,6 +92,7 @@ pub(crate) mod core {
             pubkey_to_field(&recipient),
             u64_to_field(amount),
             pubkey_to_field(&relayer_pubkey),
+            u64_to_field(tree_state.relayer_fee_bps as u64),
         ];
 
         // 3. Groth16 verification. Two routes:
@@ -93,9 +109,7 @@ pub(crate) mod core {
         //    rejected the tx if the PDA pre-existed.
         nullifier_pda.bump = nullifier_pda_bump;
 
-        // 5. Emit. The funds-movement step in the variant handler is
-        //    intentionally NOT part of this helper so each transport
-        //    (lamports / SPL) can encode its own seeds + bump.
+        // 5. Emit. Funds-movement happens in the variant handler.
         let clock = Clock::get()?;
         emit!(WithdrawEvent {
             nullifier_hash,
@@ -201,35 +215,31 @@ pub fn handler(
         sunspot_account.as_ref(),
     )?;
 
-    // 5. Pay the recipient. Native-SOL transfer from the vault PDA.
-    //    `try_borrow_mut_lamports` is the canonical Anchor pattern for
-    //    PDA-owned native accounts where signer seeds aren't needed
-    //    because the program owns the account directly.
+    // 5. Split the lamport payout between recipient and relayer.
+    let fee_bps = ctx.accounts.tree_state.relayer_fee_bps;
+    let (recipient_amount, relayer_cut) = split_payout(amount, fee_bps)?;
+
+    // 6. Move lamports out of the vault PDA. `try_borrow_mut_lamports`
+    //    is the canonical Anchor pattern for PDA-owned native accounts.
     let vault_info = &ctx.accounts.vault;
     let recipient_info = &ctx.accounts.recipient_account;
-    pay_lamports(vault_info, recipient_info, amount)?;
+    let relayer_info = ctx.accounts.relayer.to_account_info();
 
-    Ok(())
-}
-
-/// Move `amount` lamports from `from` (PDA-owned native account) to `to`.
-///
-/// Extracted so Priority 3 can layer relayer-fee deduction on top
-/// without touching the Groth16 prelude. Both the SOL withdrawal and
-/// any future fee split share this primitive.
-pub(crate) fn pay_lamports(
-    from: &AccountInfo<'_>,
-    to: &AccountInfo<'_>,
-    amount: u64,
-) -> Result<()> {
-    **from.try_borrow_mut_lamports()? = from
+    **vault_info.try_borrow_mut_lamports()? = vault_info
         .lamports()
         .checked_sub(amount)
         .ok_or_else(|| error!(BagsVaultError::InvalidProof))?;
-    **to.try_borrow_mut_lamports()? = to
+    **recipient_info.try_borrow_mut_lamports()? = recipient_info
         .lamports()
-        .checked_add(amount)
+        .checked_add(recipient_amount)
         .ok_or_else(|| error!(BagsVaultError::InvalidProof))?;
+    if relayer_cut > 0 {
+        **relayer_info.try_borrow_mut_lamports()? = relayer_info
+            .lamports()
+            .checked_add(relayer_cut)
+            .ok_or_else(|| error!(BagsVaultError::InvalidProof))?;
+    }
+
     Ok(())
 }
 
@@ -247,6 +257,17 @@ pub(crate) fn pay_lamports(
 pub struct WithdrawSpl<'info> {
     #[account(mut)]
     pub relayer: Signer<'info>,
+
+    /// Relayer's ATA — receives the relayer cut. Owner must be the
+    /// relayer signer to keep fee accounting honest.
+    #[account(
+        mut,
+        constraint = relayer_token_account.mint == tree_state.token_mint
+            @ BagsVaultError::DenominationMismatch,
+        constraint = relayer_token_account.owner == relayer.key()
+            @ BagsVaultError::Unauthorized,
+    )]
+    pub relayer_token_account: Account<'info, TokenAccount>,
 
     /// Vault PDA — authority over the vault's ATA.
     #[account(
@@ -340,13 +361,16 @@ pub fn handler_spl(
         sunspot_account.as_ref(),
     )?;
 
-    // 5. Pay the recipient. SPL transfer signed by the vault PDA — the
-    //    PDA is the ATA's authority so we provide its derivation seeds.
+    // 5. Split the SPL payout between recipient and relayer.
+    let fee_bps = ctx.accounts.tree_state.relayer_fee_bps;
+    let (recipient_amount, relayer_cut) = split_payout(amount, fee_bps)?;
+
     let token_mint = ctx.accounts.tree_state.token_mint;
     let vault_bump = ctx.bumps.vault;
     let vault_seeds: &[&[u8]] = &[b"vault", token_mint.as_ref(), &[vault_bump]];
     let signer_seeds: &[&[&[u8]]] = &[vault_seeds];
 
+    // 6a. Recipient transfer.
     let cpi_accounts = SplTransfer {
         from: ctx.accounts.vault_token_account.to_account_info(),
         to: ctx.accounts.recipient_token_account.to_account_info(),
@@ -357,7 +381,22 @@ pub fn handler_spl(
         cpi_accounts,
         signer_seeds,
     );
-    token::transfer(cpi_ctx, amount)?;
+    token::transfer(cpi_ctx, recipient_amount)?;
+
+    // 6b. Relayer cut. Skip the CPI when the cut is 0 to save compute.
+    if relayer_cut > 0 {
+        let fee_accounts = SplTransfer {
+            from: ctx.accounts.vault_token_account.to_account_info(),
+            to: ctx.accounts.relayer_token_account.to_account_info(),
+            authority: ctx.accounts.vault.to_account_info(),
+        };
+        let fee_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            fee_accounts,
+            signer_seeds,
+        );
+        token::transfer(fee_ctx, relayer_cut)?;
+    }
 
     Ok(())
 }

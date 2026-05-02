@@ -101,8 +101,8 @@ Lapisan ini menangani logika inti dari privasi dan penyimpanan dana. Implementas
 ### B. Integrasi Bags API Layer
 Protokol ini secara mendalam memanfaatkan infrastruktur Bags API untuk manajemen token dan pendapatan.
 
-*   **Trade Tokens API (`/trade/swap`)**: Digunakan untuk melakukan *swap* token secara otomatis sebelum deposit jika pengguna ingin mendepositkan token kreator spesifik [3].
-*   **Claim Token Fees API (`/token-launch/claim-txs/v3`)**: Kreator dapat mengklaim *fee* mereka langsung ke dalam BagsVault secara anonim [4].
+*   **Trade Tokens API (`/trade/swap`)**: Digunakan untuk melakukan *swap* token secara otomatis sebelum deposit jika pengguna ingin mendepositkan token kreator spesifik [3]. Orkestrator chained tersedia di [`backend/app/services/swap_to_deposit_service.py`](../backend/app/services/swap_to_deposit_service.py); endpoint `POST /api/bags/swap-to-deposit` mengembalikan pasangan `(swap_tx, deposit_tx)` base64 yang harus ditandatangani dompet pengguna secara berurutan — backend tidak pernah memegang kunci.
+*   **Claim Token Fees API (`/token-launch/claim-txs/v3`)**: Kreator dapat mengklaim *fee* mereka langsung ke dalam BagsVault secara anonim [4]. Orkestrator chained tersedia di [`backend/app/services/claim_to_deposit_service.py`](../backend/app/services/claim_to_deposit_service.py); endpoint `POST /api/bags/claim-to-deposit` mengembalikan batch claim tx + deposit tx untuk ditandatangani berurutan.
 *   **Fee Share Configuration (`FEE2tBhCKAt7shrod19QttSVREUYPiyMzoku1mL1gqVK`)**: Berinteraksi dengan program *Fee Share V2* Bags untuk memastikan distribusi pendapatan yang tepat [5]. On-chain entry point-nya adalah instruksi `register_fee_share(bps)` di [`programs/bagsvault/src/instructions/fee_share.rs`](../programs/bagsvault/src/instructions/fee_share.rs) — instruksi ini melakukan CPI ke Fee Share V2 dengan vault PDA sebagai *recipient*. Catatan: layout instruksi Fee Share V2 belum terverifikasi terhadap program on-chain (placeholder discriminator); cari komentar `TODO(fee-share)` di [`src/fee_share.rs`](../programs/bagsvault/src/fee_share.rs) sebelum deploy ke mainnet.
 
 ### C. Lapisan Privasi & Kepatuhan (Backend)
@@ -113,6 +113,12 @@ Lapisan ini menyeimbangkan antara privasi absolut dan kepatuhan terhadap regulas
 
 ### D. Relayer Network
 Jaringan relayer memungkinkan pengguna untuk melakukan penarikan dana tanpa harus memiliki SOL di dompet tujuan baru mereka (*gasless transactions*). Relayer akan membayarkan biaya gas Solana dan mengambil sebagian kecil dari dana penarikan sebagai kompensasi.
+
+Mulai Phase 4, *cut* relayer dipotong **on-chain** oleh handler `withdraw` di [`programs/bagsvault/src/instructions/withdraw.rs`](../programs/bagsvault/src/instructions/withdraw.rs):
+
+*   Pool menyimpan `relayer_fee_bps: u16` di [`MerkleTreeState`](../programs/bagsvault/src/state.rs) (di-set oleh `initialize`, dibatasi maksimum 1000 bps = 10%).
+*   `relayer_cut = amount * relayer_fee_bps / 10000`; sisanya ke `recipient`. Transfer keduanya menggunakan pola `try_borrow_mut_lamports` PDA-owned native account.
+*   Nilai `fee_bps` di-bind ke proof melalui public input **index 5**, sehingga relayer jahat tidak bisa me-replay proof terhadap pool dengan *cut* yang berbeda. Tiga lapisan harus sepakat pada nilai ini: sirkuit Noir, verifier on-chain, dan prover off-chain (`backend/app/services/zk_proof_service.py`).
 
 ## 3. Alur Transaksi Lengkap
 
@@ -137,12 +143,13 @@ Fase ini terjadi ketika kreator ingin mencairkan dana ke dompet baru (fresh wall
 
 Sirkuit Zero-Knowledge ditulis menggunakan bahasa **Noir** dan dapat ditemukan di [`circuits/bagsvault_withdraw/src/main.nr`](../circuits/bagsvault_withdraw/src/main.nr). Build pipeline: `nargo compile` → `bb prove` → bytes 256-byte yang langsung dikonsumsi `programs/bagsvault/src/verifier.rs::verify_withdraw_proof`.
 
-**Public Inputs (urutan harus match `verifier.rs::NUM_PUBLIC_INPUTS = 5`):**
+**Public Inputs (urutan harus match `verifier.rs::NUM_PUBLIC_INPUTS = 6`):**
 1.  `root` — Merkle tree root saat ini (bytes32 BE).
 2.  `nullifier_hash` — `poseidon(nullifier, leaf_index)`.
 3.  `recipient` — Alamat penarikan tujuan (32 byte pubkey).
 4.  `amount` — Jumlah penarikan (binding ke denominasi pool tetap).
 5.  `relayer` — Pubkey relayer; mengikat proof ke pengirim sehingga tx tidak bisa di-frontrun di mempool.
+6.  `fee_bps` — *Cut* relayer (basis points) yang diiklankan pool, di-encode sebagai `u64_to_field`. Mengikat proof ke konfigurasi pool sehingga relayer tidak bisa memotong nilai berbeda dari yang dibuktikan.
 
 **Private Inputs (witness):**
 *   `nullifier`, `secret`: Preimage komitmen (`commitment = poseidon(nullifier, secret, amount)`).

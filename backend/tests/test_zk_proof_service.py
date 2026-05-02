@@ -97,6 +97,7 @@ async def test_stub_mode_returns_zero_proof_and_correct_public_inputs() -> None:
         is_left=[1] * 20,
         recipient_pubkey_bytes=recipient,
         relayer_pubkey_bytes=relayer,
+        fee_bps=15,
     )
     result = await svc.generate_withdraw_proof(inp)
 
@@ -108,13 +109,50 @@ async def test_stub_mode_returns_zero_proof_and_correct_public_inputs() -> None:
     assert all(c == "0" for c in result.proof_hex[2:])
 
     # Public-input vector ordering must match the on-chain verifier.
-    assert len(result.public_inputs_hex) == 5
+    # NUM_PUBLIC_INPUTS = 6 with fee_bps at index 5.
+    assert len(result.public_inputs_hex) == 6
     assert result.public_inputs_hex[0] == result.root_hex
     assert result.public_inputs_hex[1] == result.nullifier_hash_hex
     # amount is encoded as a 32-byte BE field element.
     assert result.public_inputs_hex[3].endswith(
         (1_000_000_000).to_bytes(8, "big").hex()
     )
+    # fee_bps lives at index 5, encoded as a u64 BE field element so the
+    # last 8 bytes carry 15 = 0x0f and everything else is zero.
+    fee_hex = result.public_inputs_hex[5]
+    assert fee_hex.startswith("0x")
+    assert fee_hex.endswith((15).to_bytes(8, "big").hex())
+    assert int(fee_hex, 16) == 15
+
+
+@pytest.mark.asyncio
+async def test_fee_bps_at_index_5_changes_with_input() -> None:
+    """Pin the public-input ordering: fee_bps lives at index 5 and only
+    that slot changes when fee_bps changes."""
+
+    svc = _service(stub=True)
+    recipient = bytes(Pubkey.default())
+    relayer = hashlib.sha256(b"relayer").digest()
+
+    def _make(fee: int) -> WithdrawProofInput:
+        return WithdrawProofInput(
+            nullifier=7,
+            secret=11,
+            amount=1_000_000_000,
+            leaf_index=0,
+            merkle_path=[0] * 20,
+            is_left=[1] * 20,
+            recipient_pubkey_bytes=recipient,
+            relayer_pubkey_bytes=relayer,
+            fee_bps=fee,
+        )
+
+    a = await svc.generate_withdraw_proof(_make(15))
+    b = await svc.generate_withdraw_proof(_make(250))
+
+    assert a.public_inputs_hex[:5] == b.public_inputs_hex[:5]
+    assert a.public_inputs_hex[5] != b.public_inputs_hex[5]
+    assert int(b.public_inputs_hex[5], 16) == 250
 
 
 def test_toolchain_probe_does_not_raise_when_binaries_missing() -> None:

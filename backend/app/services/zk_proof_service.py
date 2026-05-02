@@ -82,6 +82,10 @@ class WithdrawProofInput:
     is_left: list[int]
     recipient_pubkey_bytes: bytes
     relayer_pubkey_bytes: bytes
+    # Pool's advertised relayer cut in basis points. Bound into the
+    # proof's public inputs at index 5 — must match
+    # ``MerkleTreeState::relayer_fee_bps`` on chain.
+    fee_bps: int = 0
 
 
 @dataclass(frozen=True)
@@ -229,7 +233,14 @@ class ZkProofService:
         relayer_field = _bytes_to_field(payload.relayer_pubkey_bytes)
         root = self.merkle_root_from_path(commitment, payload.merkle_path, payload.is_left)
 
-        public_inputs = [root, nullifier_hash, recipient_field, payload.amount, relayer_field]
+        public_inputs = [
+            root,
+            nullifier_hash,
+            recipient_field,
+            payload.amount,
+            relayer_field,
+            payload.fee_bps,
+        ]
         public_inputs_hex = [_hex32(v) for v in public_inputs]
 
         proof_hex = await self._produce_proof_bytes(payload, root, nullifier_hash, public_inputs)
@@ -310,6 +321,7 @@ class ZkProofService:
                 f'recipient = "{_hex32(recipient_field)}"',
                 f'amount = "{payload.amount}"',
                 f'relayer = "{_hex32(relayer_field)}"',
+                f'fee_bps = "{payload.fee_bps}"',
                 "",
                 f'nullifier = "{_hex32(payload.nullifier)}"',
                 f'secret = "{_hex32(payload.secret)}"',

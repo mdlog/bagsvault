@@ -71,6 +71,15 @@ class WithdrawProofRequest(BaseModel):
     )
     recipient: str = Field(..., description="Recipient pubkey as base58 OR 32-byte hex.")
     relayer: str = Field(..., description="Relayer pubkey as base58 OR 32-byte hex.")
+    fee_bps: int = Field(
+        ...,
+        ge=0,
+        le=10_000,
+        description=(
+            "Pool's advertised relayer cut in basis points; bound into "
+            "the proof at public-input index 5."
+        ),
+    )
 
 
 class WithdrawProofResponse(BaseModel):
@@ -151,6 +160,7 @@ async def generate_withdraw_proof(
         is_left=[1 if int(b) else 0 for b in payload.is_left],
         recipient_pubkey_bytes=_hex_to_pubkey_bytes(payload.recipient, label="recipient"),
         relayer_pubkey_bytes=_hex_to_pubkey_bytes(payload.relayer, label="relayer"),
+        fee_bps=payload.fee_bps,
     )
     result = await service.generate_withdraw_proof(inp)
     return WithdrawProofResponse(

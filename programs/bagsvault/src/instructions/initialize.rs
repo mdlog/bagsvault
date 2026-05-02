@@ -1,11 +1,17 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 
+use crate::errors::BagsVaultError;
 use crate::merkle::{empty_filled_subtrees, empty_root};
 use crate::state::{MerkleTreeState, RootUpdatedEvent};
 
+/// Hard cap on the relayer cut, in basis points. 1000 = 10%. Anything
+/// above this is rejected at `initialize` time so the pool's advertised
+/// fee can never go higher than this for the lifetime of the account.
+pub const MAX_RELAYER_FEE_BPS: u16 = 1000;
+
 #[derive(Accounts)]
-#[instruction(denomination: u64)]
+#[instruction(denomination: u64, relayer_fee_bps: u16)]
 pub struct Initialize<'info> {
     /// Pool authority — funds rent and is the only key allowed to call
     /// admin instructions later.
@@ -30,13 +36,23 @@ pub struct Initialize<'info> {
     pub system_program: Program<'info, system_program::System>,
 }
 
-pub fn handler(ctx: Context<Initialize>, denomination: u64) -> Result<()> {
+pub fn handler(
+    ctx: Context<Initialize>,
+    denomination: u64,
+    relayer_fee_bps: u16,
+) -> Result<()> {
+    require!(
+        relayer_fee_bps <= MAX_RELAYER_FEE_BPS,
+        BagsVaultError::FeeBpsTooHigh
+    );
+
     let bump = ctx.bumps.tree_state;
     let state = &mut ctx.accounts.tree_state;
     state.authority = ctx.accounts.authority.key();
     state.token_mint = ctx.accounts.token_mint.key();
     state.denomination = denomination;
     state.commitment_count = 0;
+    state.relayer_fee_bps = relayer_fee_bps;
     state.root_cursor = 0;
     state.paused = false;
     state.filled_subtrees = empty_filled_subtrees();

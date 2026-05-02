@@ -10,7 +10,10 @@
         { "name": "treeState", "isMut": true, "isSigner": false },
         { "name": "systemProgram", "isMut": false, "isSigner": false }
       ],
-      "args": [{ "name": "denomination", "type": "u64" }]
+      "args": [
+        { "name": "denomination", "type": "u64" },
+        { "name": "relayerFeeBps", "type": "u16" }
+      ]
     },
     {
       "name": "depositSol",
@@ -147,6 +150,7 @@
           { "name": "tokenMint", "type": "publicKey" },
           { "name": "denomination", "type": "u64" },
           { "name": "commitmentCount", "type": "u64" },
+          { "name": "relayerFeeBps", "type": "u16" },
           { "name": "rootCursor", "type": "u8" },
           { "name": "paused", "type": "bool" },
           { "name": "filledSubtrees", "type": { "array": [{ "array": ["u8", 32] }, 20] } },
@@ -196,7 +200,8 @@
     { "code": 6003, "name": "InvalidProof", "msg": "Groth16 proof failed verification." },
     { "code": 6004, "name": "DenominationMismatch", "msg": "Deposit denomination does not match pool denomination." },
     { "code": 6005, "name": "PoolPaused", "msg": "Pool is paused — admin must unpause before further use." },
-    { "code": 6006, "name": "Unauthorized", "msg": "Caller is not authorised for this admin action." }
+    { "code": 6006, "name": "Unauthorized", "msg": "Caller is not authorised for this admin action." },
+    { "code": 6007, "name": "FeeBpsTooHigh", "msg": "Relayer fee bps exceeds the 10% protocol cap." }
   ],
   "metadata": {
     "address": "BAGSVau1tProgram11111111111111111111111111111"

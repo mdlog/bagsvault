@@ -12,6 +12,10 @@
 //   3. recipient       — destination wallet (binds proof to address)
 //   4. amount          — withdrawal denomination (binds to fixed-amount pool)
 //   5. relayer         — relayer pubkey (anti-frontrunning)
+//   6. fee_bps         — pool's advertised relayer cut in basis points;
+//                         binds the proof to the on-chain pool config so a
+//                         malicious relayer cannot replay against a pool
+//                         whose advertised cut differs from the prover's.
 //
 // Private inputs (witness):
 //   * nullifier        — preimage of nullifier_hash
@@ -28,6 +32,7 @@ fn main(
     recipient: pub Field,
     amount: pub Field,
     relayer: pub Field,
+    fee_bps: pub Field,
 
     nullifier: Field,
     secret: Field,
@@ -62,6 +67,12 @@ fn main(
     //    exact pair the verifier sees on chain.
     let _bind = recipient * relayer;
     assert(_bind == _bind);
+
+    // 5. Same trick for fee_bps — without this the prover could omit
+    //    the input from the constraint system and the relayer-cut
+    //    binding documented in the verifier doc comment would not hold.
+    let _fee_bind = fee_bps * relayer;
+    assert(_fee_bind == _fee_bind);
 }
 
 #[test]
@@ -85,6 +96,7 @@ fn smoke_test() {
         0x1234,
         amount,
         0x5678,
+        15,
         nullifier,
         secret,
         leaf_index,

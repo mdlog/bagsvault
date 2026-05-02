@@ -13,6 +13,10 @@
 //!   3. `recipient`       — pubkey, 32 BE bytes (Solana address as field)
 //!   4. `amount`          — u64 BE → 32-byte field element
 //!   5. `relayer`         — pubkey, 32 BE bytes (anti-frontrunning binding)
+//!   6. `fee_bps`         — u16 cast to u64 → 32-byte field element. Binds
+//!                          the proof to the on-chain advertised fee so a
+//!                          malicious relayer cannot replay the proof
+//!                          against a pool with a different cut.
 
 use anchor_lang::prelude::*;
 use groth16_solana::groth16::Groth16Verifier;

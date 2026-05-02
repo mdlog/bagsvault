@@ -4,6 +4,12 @@ The on-chain program's account ordering and instruction-data layout are
 load-bearing: a mismatch produces an opaque deserialisation error from
 the Anchor framework. These tests pin the wire format so future
 refactors fail loudly instead of silently shifting the layout.
+
+Scope note: the ix data layout itself does NOT include ``fee_bps`` —
+the on-chain handler reads ``tree_state.relayer_fee_bps`` directly when
+assembling the public-input array passed to the verifier. The
+public-input layout is verified separately in
+:mod:`tests.test_relayer_fee_layout` and :mod:`tests.test_zk_proof_service`.
 """
 
 from __future__ import annotations
