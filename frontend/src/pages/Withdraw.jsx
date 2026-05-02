@@ -1,4 +1,19 @@
-import { useState } from "react";
+// Withdraw page — real backend-wired flow.
+//
+// Flow:
+//   1. User pastes the `bagsvault-v1-...` note.
+//   2. We parse it locally → { token, amount, nullifier, secret }.
+//   3. Fetch anonymity state + the Merkle inclusion path for the
+//      committed leaf from the backend. (The leaf index is left as a
+//      user-input until the indexer-by-commitment lookup lands.)
+//   4. POST /api/proofs/withdraw to obtain the Groth16 proof.
+//   5. POST /api/withdrawals/relay to broadcast on-chain via the relayer.
+//   6. Display the resulting signature + Solana Explorer link.
+//
+// Failures at any step show the backend's structured error message via
+// toast.error — no setTimeout / fake hashes here.
+
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   Shield,
@@ -10,70 +25,64 @@ import {
   Zap,
   Key,
   AlertTriangle,
+  ExternalLink,
 } from "lucide-react";
+import {
+  generateWithdrawProof,
+  getAnonymityState,
+  getMerklePath,
+  parseNote,
+  relayWithdrawal,
+} from "@/lib/zk_client";
 
-const RELAYERS = [
-  { id: "rly-01", name: "NovaRelay", fee: 0.15, ping: 42, uptime: 99.98 },
-  { id: "rly-02", name: "GhostNode", fee: 0.20, ping: 58, uptime: 99.91 },
-  { id: "rly-03", name: "PhantomProxy", fee: 0.12, ping: 71, uptime: 99.74 },
-];
+const SOLANA_EXPLORER = "https://explorer.solana.com/tx";
+const LAMPORTS_PER_SOL = 1_000_000_000;
+
+function toBaseUnits(token, amount) {
+  const num = parseFloat(amount);
+  if (Number.isNaN(num)) return 0;
+  if (token === "SOL") return Math.round(num * LAMPORTS_PER_SOL);
+  if (token === "USDC") return Math.round(num * 1_000_000);
+  return Math.round(num * LAMPORTS_PER_SOL);
+}
 
 export default function Withdraw() {
   const [note, setNote] = useState("");
   const [recipient, setRecipient] = useState("");
-  const [relayer, setRelayer] = useState("rly-01");
-  const [stage, setStage] = useState("idle");
+  const [leafIndex, setLeafIndex] = useState("0");
+  const [stage, setStage] = useState("idle"); // idle | path | proving | submitting | done
   const [progress, setProgress] = useState(0);
   const [parsed, setParsed] = useState(null);
-  const [txHash, setTxHash] = useState("");
+  const [txSignature, setTxSignature] = useState("");
+  const [anonState, setAnonState] = useState(null);
+  const [errorMsg, setErrorMsg] = useState("");
+
+  // Best-effort load of the current pool state on mount so the user
+  // sees the live anonymity-set count + root.
+  useEffect(() => {
+    let cancelled = false;
+    getAnonymityState()
+      .then((s) => {
+        if (!cancelled) setAnonState(s);
+      })
+      .catch((err) => {
+        // Don't toast — the page must render even if the backend is
+        // misconfigured. We surface the failure inline below.
+        if (!cancelled) setErrorMsg(err?.message || "Could not load pool state.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleParse = () => {
-    if (!note.startsWith("bagsvault-v1-")) {
-      toast.error("Invalid note format.");
+    const p = parseNote(note);
+    if (!p) {
+      toast.error("Invalid note format. Expected bagsvault-v1-<token>-<amount>-<nullifier>-<secret>.");
       return;
     }
-    const parts = note.split("-");
-    setParsed({
-      chain: parts[2] || "solana",
-      token: (parts[3] || "sol").toUpperCase(),
-      amount: parts[4] || "1",
-      secret: note.slice(-12),
-    });
+    setParsed(p);
     toast.success("Note decrypted", { description: "Ready to generate proof." });
-  };
-
-  const withdraw = async () => {
-    if (!parsed) {
-      toast.error("Paste a valid note first.");
-      return;
-    }
-    if (!recipient || recipient.length < 20) {
-      toast.error("Enter a valid recipient address.");
-      return;
-    }
-    setStage("proving");
-    setProgress(0);
-    const start = Date.now();
-    const duration = 3500;
-    const tick = setInterval(() => {
-      const p = Math.min(100, ((Date.now() - start) / duration) * 100);
-      setProgress(p);
-      if (p >= 100) clearInterval(tick);
-    }, 60);
-
-    await new Promise((r) => setTimeout(r, duration));
-
-    setStage("submitting");
-    await new Promise((r) => setTimeout(r, 1600));
-
-    const hash = "5" + Array.from({ length: 87 })
-      .map(() => "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMN".charAt(Math.floor(Math.random() * 50)))
-      .join("");
-    setTxHash(hash);
-    setStage("done");
-    toast.success("Withdrawal successful", {
-      description: `Sent ${parsed.amount} ${parsed.token} to fresh wallet.`,
-    });
   };
 
   const reset = () => {
@@ -82,10 +91,82 @@ export default function Withdraw() {
     setParsed(null);
     setNote("");
     setRecipient("");
-    setTxHash("");
+    setLeafIndex("0");
+    setTxSignature("");
   };
 
-  const selectedRelayer = RELAYERS.find((r) => r.id === relayer);
+  const withdraw = async () => {
+    if (!parsed) {
+      toast.error("Paste a valid note first.");
+      return;
+    }
+    if (!recipient || recipient.length < 32) {
+      toast.error("Enter a valid recipient Solana address.");
+      return;
+    }
+    const idx = Number.parseInt(leafIndex, 10);
+    if (Number.isNaN(idx) || idx < 0) {
+      toast.error("Leaf index must be a non-negative integer.");
+      return;
+    }
+
+    try {
+      // Step 1: fetch the inclusion path.
+      setStage("path");
+      setProgress(15);
+      const pathResp = await getMerklePath(idx);
+      if (pathResp.source === "fallback-empty" && idx !== 0) {
+        toast.warning("Path is empty-tree fallback — only safe for the first deposit.");
+      }
+
+      // Step 2: ask the backend to generate the Groth16 proof.
+      setStage("proving");
+      setProgress(45);
+      const baseUnits = toBaseUnits(parsed.token, parsed.amount);
+      const proofResp = await generateWithdrawProof({
+        nullifier: parsed.nullifier,
+        secret: parsed.secret,
+        amount: baseUnits,
+        leafIndex: idx,
+        merklePath: pathResp.siblings,
+        isLeft: pathResp.is_left,
+        recipient,
+        relayer: "auto", // backend picks the best relayer
+      });
+
+      // Step 3: relay the withdrawal on-chain.
+      setStage("submitting");
+      setProgress(85);
+      const relayResp = await relayWithdrawal({
+        proof: proofResp.proof,
+        public_inputs: proofResp.public_inputs || {
+          root: anonState?.current_root || "0".repeat(64),
+          nullifier_hash: proofResp.nullifier_hash || parsed.nullifier,
+          recipient,
+          amount: baseUnits,
+          token: parsed.token,
+        },
+      });
+
+      setProgress(100);
+      setTxSignature(relayResp.signature || "");
+      setStage("done");
+      toast.success("Withdrawal successful", {
+        description: `${parsed.amount} ${parsed.token} sent to ${recipient.slice(0, 6)}…${recipient.slice(-4)}.`,
+      });
+    } catch (err) {
+      toast.error(err?.message || "Withdrawal failed.");
+      setStage("idle");
+      setProgress(0);
+    }
+  };
+
+  const explorerUrl = useMemo(() => {
+    if (!txSignature) return null;
+    // Default to devnet explorer for now; users can change cluster
+    // manually in the URL bar if needed.
+    return `${SOLANA_EXPLORER}/${txSignature}?cluster=devnet`;
+  }, [txSignature]);
 
   return (
     <div className="max-w-[1280px] mx-auto px-6 lg:px-8 pt-12 pb-20">
@@ -96,14 +177,22 @@ export default function Withdraw() {
             Anonymous withdrawal
           </h1>
           <p className="text-zinc-400 mt-2 max-w-xl text-sm leading-relaxed">
-            Paste your private note. A ZK-SNARK proof is generated in your browser —
-            no on-chain link between deposit and payout.
+            Paste your private note. A ZK-SNARK proof is generated server-side
+            and broadcast through a relayer — no on-chain link between deposit
+            and payout.
           </p>
         </div>
         <div className="flex items-center gap-2 border border-white/10 px-3 h-9 rounded-md text-xs text-zinc-400">
           <Cpu className="w-3.5 h-3.5 text-[#14F195]" /> Noir · Groth16
         </div>
       </div>
+
+      {errorMsg && (
+        <div className="mt-4 border border-amber-500/30 bg-amber-500/[0.04] rounded-md p-3 text-xs text-amber-200">
+          <AlertTriangle className="w-3.5 h-3.5 inline mr-2" />
+          {errorMsg}
+        </div>
+      )}
 
       <div className="grid lg:grid-cols-5 gap-5 mt-8">
         {/* Form */}
@@ -116,7 +205,7 @@ export default function Withdraw() {
                   data-testid="note-textarea"
                   value={note}
                   onChange={(e) => setNote(e.target.value)}
-                  placeholder="bagsvault-v1-solana-sol-1-..."
+                  placeholder="bagsvault-v1-sol-1-<nullifier>-<secret>"
                   rows={4}
                   className="w-full bg-[#07080a] border border-white/10 focus:border-[#14F195]/50 focus:outline-none rounded-md p-3.5 font-mono text-xs text-white placeholder:text-zinc-700 resize-none"
                 />
@@ -133,9 +222,9 @@ export default function Withdraw() {
               {parsed && (
                 <div className="mt-3 grid grid-cols-3 gap-2 animate-fade-up">
                   {[
-                    ["chain", parsed.chain],
-                    ["amount", `${parsed.amount} ${parsed.token}`],
-                    ["secret", `…${parsed.secret}`],
+                    ["token", parsed.token],
+                    ["amount", `${parsed.amount}`],
+                    ["secret", `…${parsed.secret.slice(-12)}`],
                   ].map(([k, v]) => (
                     <div key={k} className="border border-white/5 rounded-md p-2.5 bg-[#07080a]">
                       <p className="text-[10px] uppercase tracking-wider text-zinc-500">{k}</p>
@@ -161,54 +250,46 @@ export default function Withdraw() {
             </div>
 
             <div>
-              <label className="text-xs text-zinc-400 mb-2 block">Select relayer</label>
-              <div className="space-y-2">
-                {RELAYERS.map((r) => (
-                  <button
-                    key={r.id}
-                    data-testid={`relayer-${r.id}`}
-                    onClick={() => setRelayer(r.id)}
-                    className={`w-full p-3.5 rounded-md border text-left transition-colors ${
-                      relayer === r.id
-                        ? "border-[#14F195] bg-[#14F195]/[0.05]"
-                        : "border-white/10 hover:border-white/25"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <span className={`w-1.5 h-1.5 rounded-full ${relayer === r.id ? "bg-[#14F195]" : "bg-zinc-700"}`} />
-                        <span className="font-medium text-sm">{r.name}</span>
-                        <span className="font-mono text-[10px] text-zinc-500">{r.id}</span>
-                      </div>
-                      <div className="flex items-center gap-4 text-xs font-mono">
-                        <span className="text-zinc-500">{r.fee}%</span>
-                        <span className="text-zinc-500">{r.ping}ms</span>
-                        <span className="text-[#14F195]">{r.uptime}%</span>
-                      </div>
-                    </div>
-                  </button>
-                ))}
-              </div>
+              <label className="text-xs text-zinc-400 mb-2 block">Leaf index in the tree</label>
+              <input
+                data-testid="leaf-index-input"
+                value={leafIndex}
+                onChange={(e) => setLeafIndex(e.target.value)}
+                placeholder="0"
+                inputMode="numeric"
+                className="w-full h-11 bg-[#07080a] border border-white/10 focus:border-[#14F195]/50 focus:outline-none rounded-md px-3.5 font-mono text-xs text-white placeholder:text-zinc-700"
+              />
+              <p className="text-[11px] text-zinc-500 mt-2">
+                The order your deposit was inserted into the Merkle tree.
+                Until the indexer can look this up by commitment, you need to
+                supply it manually (e.g. from the deposit confirmation).
+              </p>
             </div>
 
             <div className="border-t border-white/5 pt-5 space-y-2.5 text-sm">
               <div className="flex justify-between"><span className="text-zinc-500">Withdrawing</span><span className="text-white">{parsed ? `${parsed.amount} ${parsed.token}` : "—"}</span></div>
-              <div className="flex justify-between"><span className="text-zinc-500">Relayer fee</span><span className="text-white">{selectedRelayer?.fee}%</span></div>
-              <div className="flex justify-between"><span className="text-zinc-500">Network cost</span><span className="text-white">gasless</span></div>
-              <div className="flex justify-between pt-2.5 border-t border-white/5">
-                <span className="text-zinc-500">You receive</span>
-                <span className="text-white text-lg font-semibold tracking-tight">
-                  {parsed ? (parseFloat(parsed.amount) * (1 - (selectedRelayer?.fee || 0) / 100)).toFixed(4) : "—"}{" "}
-                  <span className="text-zinc-500 text-sm font-normal">{parsed?.token}</span>
-                </span>
-              </div>
+              <div className="flex justify-between"><span className="text-zinc-500">Network cost</span><span className="text-white">gasless (relayer)</span></div>
+              <div className="flex justify-between"><span className="text-zinc-500">Anonymity set</span><span className="text-white font-mono">{anonState?.count ?? "—"}</span></div>
             </div>
 
             {stage === "done" ? (
               <div className="space-y-3">
                 <div className="border border-[#14F195]/40 bg-[#14F195]/[0.04] rounded-md p-3.5">
                   <p className="text-[10px] uppercase tracking-wider text-[#14F195]">Signature</p>
-                  <p className="font-mono text-[11px] text-white mt-1 break-all">{txHash}</p>
+                  <p data-testid="withdraw-signature" className="font-mono text-[11px] text-white mt-1 break-all">
+                    {txSignature}
+                  </p>
+                  {explorerUrl && (
+                    <a
+                      data-testid="explorer-link"
+                      href={explorerUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-2 inline-flex items-center gap-1 text-[11px] text-[#14F195] hover:text-white"
+                    >
+                      <ExternalLink className="w-3 h-3" /> View on Solana Explorer
+                    </a>
+                  )}
                 </div>
                 <button
                   data-testid="new-withdrawal-btn"
@@ -225,7 +306,9 @@ export default function Withdraw() {
                 disabled={stage !== "idle" || !parsed}
                 className="w-full h-11 bg-[#14F195] text-black rounded-md font-medium text-sm hover:bg-[#14F195]/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
-                {stage === "proving" ? (
+                {stage === "path" ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Fetching merkle path…</>
+                ) : stage === "proving" ? (
                   <><Loader2 className="w-4 h-4 animate-spin" /> Generating proof…</>
                 ) : stage === "submitting" ? (
                   <><Loader2 className="w-4 h-4 animate-spin" /> Submitting…</>
@@ -255,9 +338,9 @@ export default function Withdraw() {
               </div>
               <div className="grid grid-cols-3 gap-2 mt-3 text-[10px] font-mono">
                 {[
-                  ["witness", progress > 15],
-                  ["prover", progress > 55],
-                  ["verify", progress > 95],
+                  ["path", progress > 14],
+                  ["prover", progress > 44],
+                  ["relay", progress > 84],
                 ].map(([label, active], i) => (
                   <div
                     key={i}
@@ -273,8 +356,8 @@ export default function Withdraw() {
 
             {[
               { icon: Shield, label: "Note decrypted", active: !!parsed },
-              { icon: Cpu, label: "Witness computed", active: stage === "proving" ? progress > 20 : stage !== "idle" },
-              { icon: Lock, label: "Proof generated", active: stage === "submitting" || stage === "done" },
+              { icon: Cpu, label: "Merkle path fetched", active: progress >= 30 },
+              { icon: Lock, label: "Proof generated", active: progress >= 70 },
               { icon: Zap, label: "Relayer submitted", active: stage === "done" },
             ].map((s, i) => (
               <div key={i} className="flex items-center gap-3 py-2.5 border-b border-white/5 last:border-0">
@@ -287,20 +370,15 @@ export default function Withdraw() {
 
           <div className="border border-white/5 bg-[#0a0b0d] p-5 rounded-md">
             <p className="text-xs font-medium text-zinc-300 mb-3">Anonymity set</p>
-            <p className="text-3xl font-semibold tracking-tight">47,129</p>
+            <p className="text-3xl font-semibold tracking-tight">
+              {anonState?.count ?? "—"}
+            </p>
             <p className="text-xs text-zinc-500 mt-0.5">active commitments</p>
-            <div className="mt-4 grid grid-cols-10 gap-1">
-              {Array.from({ length: 40 }).map((_, i) => (
-                <div
-                  key={i}
-                  className={`aspect-square rounded-sm ${
-                    i === 7
-                      ? "bg-[#14F195] border border-[#14F195]"
-                      : "bg-white/[0.04] border border-white/5"
-                  }`}
-                />
-              ))}
-            </div>
+            {anonState?.current_root && (
+              <p className="text-[10px] font-mono text-zinc-500 mt-3 break-all">
+                root: {anonState.current_root.slice(0, 8)}…{anonState.current_root.slice(-8)}
+              </p>
+            )}
             <p className="text-[11px] text-zinc-500 mt-3 flex items-center gap-1.5">
               <AlertTriangle className="w-3 h-3 text-amber-500" />
               Your commitment is indistinguishable from the rest.
