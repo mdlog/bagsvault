@@ -7,9 +7,10 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from app.auth import require_wallet  # noqa: F401  # phase-2: attach as Depends.
+from app.auth import require_wallet
 from app.clients.bags_api import BagsAPIClient, get_bags_api_client
 from app.database import get_db
+from app.exceptions import AuthError
 from app.models.token import ProjectToken, TokenRegister
 from app.services.token_service import TokenService
 
@@ -27,10 +28,18 @@ def get_token_service(
 async def register_token(
     payload: TokenRegister,
     service: TokenService = Depends(get_token_service),
+    wallet: str = Depends(require_wallet),
 ) -> ProjectToken:
-    """Register a project token. Idempotent on ``(mint, creator_wallet)``."""
+    """Register a project token. Idempotent on ``(mint, creator_wallet)``.
 
-    # TODO(phase-2): require_wallet — verify creator_wallet matches signer.
+    Authenticated: the SIWS-signed wallet must equal ``payload.creator_wallet``.
+    """
+
+    if wallet != payload.creator_wallet:
+        raise AuthError(
+            "Signed wallet does not match creator_wallet in request body.",
+            details={"signed": wallet, "requested": payload.creator_wallet},
+        )
     return await service.register(payload)
 
 

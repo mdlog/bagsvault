@@ -7,8 +7,9 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from app.auth import require_wallet  # noqa: F401  # phase-2: attach as Depends.
+from app.auth import require_wallet
 from app.clients.bags_api import BagsAPIClient, get_bags_api_client
+from app.exceptions import AuthError
 from app.services.bags_service import BagsService
 
 router = APIRouter(prefix="/bags", tags=["bags"])
@@ -54,14 +55,23 @@ async def health(service: BagsService = Depends(get_bags_service)) -> dict[str, 
 async def claim_fees(
     payload: ClaimFeesRequest,
     service: BagsService = Depends(get_bags_service),
+    wallet: str = Depends(require_wallet),
 ) -> dict[str, Any]:
     """Build unsigned claim transactions for ``creator_wallet`` to sign client-side.
 
     Returns ``{"unsigned_transactions": [...], "pending_fees": [...], ...}``.
     The backend NEVER signs or broadcasts — wallets sign and submit.
+
+    Authenticated: the request must carry a valid SIWS signature whose pubkey
+    matches ``creator_wallet``. We refuse to build claim txs for a wallet the
+    caller hasn't proven ownership of.
     """
 
-    # TODO(phase-2): require_wallet — verify creator_wallet matches signer.
+    if wallet != payload.creator_wallet:
+        raise AuthError(
+            "Signed wallet does not match creator_wallet in request body.",
+            details={"signed": wallet, "requested": payload.creator_wallet},
+        )
     return await service.claim_fees(payload.creator_wallet, payload.token_mint)
 
 
@@ -69,10 +79,14 @@ async def claim_fees(
 async def swap_quote(
     payload: SwapQuoteRequest,
     service: BagsService = Depends(get_bags_service),
+    wallet: str = Depends(require_wallet),  # noqa: ARG001 — used to gate access only
 ) -> dict[str, Any]:
-    """Fetch a swap quote + unsigned route transaction from Bags."""
+    """Fetch a swap quote + unsigned route transaction from Bags.
 
-    # TODO(phase-2): require_wallet — verify quote requester.
+    Authenticated: any verified wallet may request quotes (no body-vs-signer
+    binding required since quotes are read-only).
+    """
+
     return await service.swap_quote(
         input_mint=payload.input_mint,
         output_mint=payload.output_mint,

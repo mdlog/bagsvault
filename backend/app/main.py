@@ -8,7 +8,18 @@ from starlette.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import close_db, ensure_indexes
 from app.exceptions import register_exception_handlers
-from app.routers import bags, compliance, health, root, status, tokens
+from app.routers import (
+    anonymity,
+    bags,
+    compliance,
+    deposits,
+    health,
+    relayers,
+    root,
+    status,
+    tokens,
+    withdrawals,
+)
 
 logging.basicConfig(
     level=settings.log_level,
@@ -54,4 +65,8 @@ api_router.include_router(status.router)
 api_router.include_router(compliance.router)
 api_router.include_router(bags.router)
 api_router.include_router(tokens.router)
+api_router.include_router(deposits.router)
+api_router.include_router(withdrawals.router)
+api_router.include_router(relayers.router)
+api_router.include_router(anonymity.router)
 app.include_router(api_router)

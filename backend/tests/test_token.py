@@ -263,11 +263,22 @@ async def test_get_with_metadata_handles_upstream_error() -> None:
 # ----------------------------------------------------------------------
 # Router-level
 # ----------------------------------------------------------------------
-def _make_app(service: TokenService) -> FastAPI:
+def _make_app(service: TokenService, verified_wallet: str | None = None) -> FastAPI:
+    """Build a router-only test app.
+
+    ``verified_wallet`` overrides the SIWS auth dependency. Pass the value used
+    as ``creator_wallet`` in the request body for happy paths, or a different
+    string to exercise the body-vs-signer mismatch path.
+    """
+
+    from app.auth import require_wallet
+
     app = FastAPI()
     register_exception_handlers(app)
     app.include_router(tokens_router.router, prefix="/api")
     app.dependency_overrides[tokens_router.get_token_service] = lambda: service
+    if verified_wallet is not None:
+        app.dependency_overrides[require_wallet] = lambda: verified_wallet
     return app
 
 
@@ -275,14 +286,15 @@ def _make_app(service: TokenService) -> FastAPI:
 async def test_router_register_endpoint() -> None:
     db = _make_db()
     service = TokenService(db=db, client=_FakeBagsClient())  # type: ignore[arg-type]
-    app = _make_app(service)
+    creator = "CRTR" + "y" * 28
+    app = _make_app(service, verified_wallet=creator)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
             "/api/tokens/register",
             json={
                 "mint": "MINT" + "x" * 28,
-                "creator_wallet": "CRTR" + "y" * 28,
+                "creator_wallet": creator,
                 "symbol": "ABC",
                 "name": "Abc Token",
                 "decimals": 6,
@@ -292,6 +304,27 @@ async def test_router_register_endpoint() -> None:
     body = resp.json()
     assert body["symbol"] == "ABC"
     assert body["decimals"] == 6
+
+
+@pytest.mark.asyncio
+async def test_router_register_rejects_signer_body_mismatch() -> None:
+    db = _make_db()
+    service = TokenService(db=db, client=_FakeBagsClient())  # type: ignore[arg-type]
+    app = _make_app(service, verified_wallet="A" * 32)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/tokens/register",
+            json={
+                "mint": "MINT" + "x" * 28,
+                "creator_wallet": "B" * 32,
+                "symbol": "ABC",
+                "name": "Abc Token",
+                "decimals": 6,
+            },
+        )
+    assert resp.status_code == 401
+    assert resp.json()["error"]["code"] == "auth_error"
 
 
 @pytest.mark.asyncio
@@ -389,14 +422,15 @@ async def test_router_register_conflict_returns_409() -> None:
         ]
     )
     service = TokenService(db=db, client=_FakeBagsClient())  # type: ignore[arg-type]
-    app = _make_app(service)
+    new_creator = "OWNER2" + "q" * 26
+    app = _make_app(service, verified_wallet=new_creator)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
             "/api/tokens/register",
             json={
                 "mint": mint,
-                "creator_wallet": "OWNER2" + "q" * 26,
+                "creator_wallet": new_creator,
                 "symbol": "VAULT",
                 "name": "v",
             },

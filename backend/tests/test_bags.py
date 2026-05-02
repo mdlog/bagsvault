@@ -219,11 +219,24 @@ async def test_service_swap_quote_passes_through() -> None:
 # ----------------------------------------------------------------------
 # Router-level (end-to-end via ASGI transport)
 # ----------------------------------------------------------------------
-def _make_app(service: BagsService) -> FastAPI:
+def _make_app(service: BagsService, verified_wallet: str | None = None) -> FastAPI:
+    """Build a router-only test app.
+
+    ``verified_wallet`` overrides the SIWS auth dependency so tests don't need
+    to forge real signatures. Pass the same string used as ``creator_wallet``
+    in the request body for happy-path tests; pass a different string to test
+    the body-vs-signer mismatch path; pass ``None`` to leave auth unmocked
+    (useful for the unconfigured-503 path which must short-circuit before auth).
+    """
+
+    from app.auth import require_wallet
+
     app = FastAPI()
     register_exception_handlers(app)
     app.include_router(bags_router.router, prefix="/api")
     app.dependency_overrides[bags_router.get_bags_service] = lambda: service
+    if verified_wallet is not None:
+        app.dependency_overrides[require_wallet] = lambda: verified_wallet
     return app
 
 
@@ -248,12 +261,13 @@ async def test_router_claim_fees_happy_path() -> None:
         }
     )
     service = BagsService(client=fake)  # type: ignore[arg-type]
-    app = _make_app(service)
+    wallet = "X" * 32
+    app = _make_app(service, verified_wallet=wallet)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
             "/api/bags/claim-fees",
-            json={"creator_wallet": "X" * 32},
+            json={"creator_wallet": wallet},
         )
     assert resp.status_code == 200
     body = resp.json()
@@ -262,10 +276,25 @@ async def test_router_claim_fees_happy_path() -> None:
 
 
 @pytest.mark.asyncio
+async def test_router_claim_fees_rejects_signer_body_mismatch() -> None:
+    fake = _FakeBagsClient(claim_response={"transactions": [], "pendingFees": []})
+    service = BagsService(client=fake)  # type: ignore[arg-type]
+    app = _make_app(service, verified_wallet="A" * 32)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/bags/claim-fees",
+            json={"creator_wallet": "B" * 32},
+        )
+    assert resp.status_code == 401
+    assert resp.json()["error"]["code"] == "auth_error"
+
+
+@pytest.mark.asyncio
 async def test_router_swap_quote_happy_path() -> None:
     fake = _FakeBagsClient(swap_response={"route": ["jup"], "outAmount": 500})
     service = BagsService(client=fake)  # type: ignore[arg-type]
-    app = _make_app(service)
+    app = _make_app(service, verified_wallet="X" * 32)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
@@ -299,9 +328,10 @@ async def test_router_503_when_real_client_unconfigured() -> None:
 
     real_client = BagsAPIClient(api_key="")
     real_service = BagsService(client=real_client)
-    app = _make_app(real_service)
+    wallet = "X" * 32
+    app = _make_app(real_service, verified_wallet=wallet)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post("/api/bags/claim-fees", json={"creator_wallet": "X" * 32})
+        resp = await client.post("/api/bags/claim-fees", json={"creator_wallet": wallet})
     assert resp.status_code == 503
     assert resp.json()["error"]["code"] == "service_unavailable"

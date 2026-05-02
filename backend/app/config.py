@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     # Auth
     auth_message_max_age_seconds: int = Field(default=300, alias="AUTH_MESSAGE_MAX_AGE_SECONDS")
 
+    # Relayer
+    relayer_fee_bps: int = Field(default=15, alias="RELAYER_FEE_BPS")
+    relayer_region: str = Field(default="US-East", alias="RELAYER_REGION")
+    relayer_name: str = Field(default="BagsVault-Default", alias="RELAYER_NAME")
+    relayer_max_compute_units: int = Field(default=400_000, alias="RELAYER_MAX_COMPUTE_UNITS")
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
