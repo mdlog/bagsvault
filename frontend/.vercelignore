@@ -1,0 +1,10 @@
+node_modules
+build
+coverage
+.env
+.env.local
+.env.*.local
+.cache
+*.log
+.DS_Store
+plugins/health-check
